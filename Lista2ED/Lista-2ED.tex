@@ -1,0 +1,372 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+%
+\documentclass[
+  12pt,
+]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{color}
+\usepackage{fancyvrb}
+\newcommand{\VerbBar}{|}
+\newcommand{\VERB}{\Verb[commandchars=\\\{\}]}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}}
+% Add ',fontsize=\small' for more characters per line
+\usepackage{framed}
+\definecolor{shadecolor}{RGB}{248,248,248}
+\newenvironment{Shaded}{\begin{snugshade}}{\end{snugshade}}
+\newcommand{\AlertTok}[1]{\textcolor[rgb]{0.94,0.16,0.16}{#1}}
+\newcommand{\AnnotationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\AttributeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\BaseNTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\BuiltInTok}[1]{#1}
+\newcommand{\CharTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\CommentTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\CommentVarTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ConstantTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\ControlFlowTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\DataTypeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\DecValTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\DocumentationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ErrorTok}[1]{\textcolor[rgb]{0.64,0.00,0.00}{\textbf{#1}}}
+\newcommand{\ExtensionTok}[1]{#1}
+\newcommand{\FloatTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\FunctionTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\ImportTok}[1]{#1}
+\newcommand{\InformationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\KeywordTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\NormalTok}[1]{#1}
+\newcommand{\OperatorTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\OtherTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\PreprocessorTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\RegionMarkerTok}[1]{#1}
+\newcommand{\SpecialCharTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\SpecialStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\StringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\VariableTok}[1]{\textcolor[rgb]{0.00,0.00,0.00}{#1}}
+\newcommand{\VerbatimStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\WarningTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\usepackage{graphicx}
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+% Scale images if necessary, so that they will not overflow the page
+% margins by default, and it is still possible to overwrite the defaults
+% using explicit options in \includegraphics[width, height, ...]{}
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+% Set default figure placement to htbp
+\makeatletter
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{5}
+\usepackage[OT4]{polski}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{wrapfig}
+\usepackage{float}
+\usepackage{colortbl}
+\usepackage{pdflscape}
+\usepackage{tabu}
+\usepackage{threeparttable}
+\usepackage{threeparttablex}
+\usepackage[normalem]{ulem}
+\usepackage{makecell}
+\usepackage{xcolor}
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  pdftitle={Raport lista 2},
+  pdfauthor={Dominik Kowalczyk i Matylda Mordal},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\title{Raport lista 2}
+\usepackage{etoolbox}
+\makeatletter
+\providecommand{\subtitle}[1]{% add subtitle to \maketitle
+  \apptocmd{\@title}{\par {\large #1 \par}}{}{}
+}
+\makeatother
+\subtitle{Eksploracja danych}
+\author{Dominik Kowalczyk i Matylda Mordal}
+\date{2025-04-25}
+
+\begin{document}
+\maketitle
+
+{
+\setcounter{tocdepth}{2}
+\tableofcontents
+}
+\section{Zadanie 2 - Analiza składowych głównych (Principal Component
+Analysis
+(PCA))}\label{zadanie-2---analiza-skux142adowych-gux142uxf3wnych-principal-component-analysis-pca}
+
+Dane pochodzą z pliku CSV i zawierają informacje o jakości życia w
+różnych miastach świata, które posłużą do analizy danych (z pliku
+``uaScoresDataFrame.csv'' dostępnego pod linkiem:
+\url{https://www.kaggle.com/datasets/orhankaramancode/city-quality-of-life-dataset}.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\CommentTok{\#Wczytanie zbioru danych}
+\NormalTok{danePCA }\OtherTok{\textless{}{-}} \FunctionTok{read.csv}\NormalTok{(}\AttributeTok{file=}\StringTok{"uaScoresDataFrame.csv"}\NormalTok{, }\AttributeTok{stringsAsFactors =} \ConstantTok{TRUE}\NormalTok{)}
+\end{Highlighting}
+\end{Shaded}
+
+Zweryfikujmy i spawdźmy z jakimi danymi mamy doczynenia
+
+\begin{longtable}[t]{rlll}
+\caption{\label{tab:analiza-klas}Opis danych PCA \label{tab:OpisDanych}}\\
+\toprule
+Indeks & Nazwa zmiennej & Typ zmiennej & Opis zmiennej\\
+\midrule
+1 & X & integer & Indeks porządkowy\\
+2 & UA\_Name & factor & Nazwa obszaru miejskiego\\
+3 & UA\_Country & factor & Kraj obszaru miejskiego\\
+4 & UA\_Continent & factor & Kontynent obszaru miejskiego\\
+5 & Housing & numeric & Wskaźnik  standardu zamieszkania\\
+\addlinespace
+6 & Cost.of.Living & numeric & Wskaźnik kosztów życia\\
+7 & Startups & numeric & Wskaźnik liczby startupów\\
+8 & Venture.Capital & numeric & Wskaźnik kapitału wysokiego ryzyka\\
+9 & Travel.Connectivity & numeric & Wskaźnik łączności podróżniczej\\
+10 & Commute & numeric & Wskaźnik dojazdów do pracy\\
+\addlinespace
+11 & Business.Freedom & numeric & Wskaźnik swobody działalności gospodarczej\\
+12 & Safety & numeric & Wskaźnik bezpieczeństwa\\
+13 & Healthcare & numeric & Wskaźnik opieki zdrowotnej\\
+14 & Education & numeric & Wskaźnik edukacji\\
+15 & Environmental.Quality & numeric & Wskaźnik jakości środowiska\\
+\addlinespace
+16 & Economy & numeric & Wskaźnik ekonomii\\
+17 & Taxation & numeric & Wskaźnik opodatkowania\\
+18 & Internet.Access & numeric & Wskaźnik dostępu do internetu\\
+19 & Leisure...Culture & numeric & Wskaźnik rekreacji i kultury\\
+20 & Tolerance & numeric & Wskaźnik tolerancji\\
+\addlinespace
+21 & Outdoors & numeric & Wskaźnik aktywności na świeżym powietrzu\\
+\bottomrule
+\end{longtable}
+
+Chcąc zastosować metodę PCA, musimy wyodrębnić cechy ilościowe
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\CommentTok{\#Wyodębnienie zmiennych ilościowych}
+\NormalTok{daneIlosciowe }\OtherTok{\textless{}{-}}\NormalTok{ danePCA }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{select}\NormalTok{(}\FunctionTok{where}\NormalTok{(is.numeric)) }\SpecialCharTok{\%\textgreater{}\%}
+  \FunctionTok{select}\NormalTok{(}\SpecialCharTok{{-}}\NormalTok{X)  }
+\CommentTok{\#usuwa kolumnę X, która reprezentowała indeksy, które są zbędne w analizie }
+\end{Highlighting}
+\end{Shaded}
+
+Dodatkowo, aby móc efektownie zastosować metodę PCA musimy stwierdzić
+czy potrzebna jest standaryzacja naszych danych ilościowych. W tym celu
+wyliczymy ich wariację oraz porównamy je wizualnie.
+
+\begin{longtable}[t]{lr}
+\caption{\label{tab:wariancje}Wariancje cech ilościowych \label{tab:tabela2}}\\
+\toprule
+Cecha & Wariancja\\
+\midrule
+Housing & 5.265\\
+Cost.of.Living & 5.988\\
+Startups & 4.635\\
+Venture.Capital & 6.520\\
+Travel.Connectivity & 4.375\\
+\addlinespace
+Commute & 2.320\\
+Business.Freedom & 4.450\\
+Safety & 3.051\\
+Healthcare & 2.196\\
+Education & 4.897\\
+\addlinespace
+Environmental.Quality & 4.840\\
+Economy & 2.302\\
+Taxation & 2.855\\
+Internet.Access & 3.505\\
+Leisure...Culture & 4.027\\
+\addlinespace
+Tolerance & 2.974\\
+Outdoors & 2.534\\
+\bottomrule
+\end{longtable}
+
+\begin{center}\includegraphics{Lista-2ED_files/figure-latex/wariancje-1} \end{center}
+
+Jak widać na (WYKESIE!) rozrzut (wariancja) między cechami ilościowymi
+jest bardzo chaotyczny, zróżnicowany - niektóre cechy mają duży zakres,
+a inne są mocno skupione wokół środka. Stąd, można stwierdzić, że należy
+przeprowadzić standaryzację danych.
+
+\begin{center}\includegraphics{Lista-2ED_files/figure-latex/standaryzacja danych-1} \end{center}
+
+Mając już ustandaryzowane dane, możemy przejść do wyliczania i
+porównania składowych głównych.
+
+\begin{center}\includegraphics{Lista-2ED_files/figure-latex/składowe-główne-1} \end{center}
+
+\begingroup\fontsize{10}{12}\selectfont
+
+\begin{longtable}[t]{lr}
+\caption{\label{tab:wykresy-obciazen}Największe obciążenia zmiennych na PC1 \label{tab:tabela2}}\\
+\toprule
+Zmienna & Loading\\
+\midrule
+Education & -0.403\\
+Business.Freedom & -0.377\\
+Environmental.Quality & -0.326\\
+\bottomrule
+\end{longtable}
+\endgroup{}
+\begingroup\fontsize{10}{12}\selectfont
+
+\begin{longtable}[t]{lr}
+\caption{\label{tab:wykresy-obciazen}Największe obciążenia zmiennych na PC2 \label{tab:tabela3}}\\
+\toprule
+Zmienna & Loading\\
+\midrule
+Startups & -0.483\\
+Venture.Capital & -0.427\\
+Leisure...Culture & -0.365\\
+\bottomrule
+\end{longtable}
+\endgroup{}
+\begingroup\fontsize{10}{12}\selectfont
+
+\begin{longtable}[t]{lr}
+\caption{\label{tab:wykresy-obciazen}Największe obciążenia zmiennych na PC3 \label{tab:tabela4}}\\
+\toprule
+Zmienna & Loading\\
+\midrule
+Commute & -0.506\\
+Travel.Connectivity & -0.340\\
+Safety & -0.333\\
+\bottomrule
+\end{longtable}
+\endgroup{}
+
+\textbf{PC1: Ogólny Poziom Rozwoju Społeczno-Gospodarczego}
+
+Ta główna składowa łączy ze sobą edukację, wolność gospodarczą i jakość
+środowiska. Ujemne obciążenia wskazują, że jednostki z wyższymi
+wartościami PC1 charakteryzują się niższymi wynikami w tych trzech
+obszarach. Możemy interpretować to tak, że PC1 odzwierciedla pewien
+``potencjał'' lub ``bazowy poziom'' rozwoju. Wyższy wynik na tej
+składowej może wskazywać na społeczeństwa, które mają solidne fundamenty
+w edukacji, otwartą gospodarkę i dbałość o środowisko, co długoterminowo
+sprzyja dobrobytowi. Warto zauważyć, że te trzy zmienne wzajemnie się
+wzmacniają: wykształcone społeczeństwo może dążyć do lepszej jakości
+środowiska i tworzyć bardziej innowacyjną i wolną gospodarkę.
+
+\textbf{PC2: Innowacyjność i kultura}
+
+Ta składowa grupuje startupy, kapitał wysokiego ryzyka oraz aktywności
+związane z czasem wolnym i kulturą. Ujemne obciążenia sugerują, że
+wyższe wartości tej składowej są powiązane z mniejszą liczbą startupów,
+ograniczonym dostępem do finansowania innowacji (kapitał wysokiego
+ryzyka) oraz uboższą ofertą kulturalną. Zatem, PC2 wydaje się mierzyć
+``dynamikę'' i ``nowoczesność'' ekosystemu. Regiony z wyższymi wynikami
+na tej składowej prawdopodobnie posiadają silne środowisko wspierające
+nowe przedsięwzięcia, dostęp do inwestycji i bogate życie kulturalne, co
+przyciąga talent i sprzyja innowacjom.
+
+\textbf{PC3: Infrastruktura, logistyka, bezpieczeństwo}
+
+Ta składowa łączy czas dojazdu, łączność komunikacyjną i poczucie
+bezpieczeństwa. Ponownie, ujemne obciążenia oznaczają, że wyższe
+wartości PC3 korelują z dłuższymi czasami dojazdu, słabszą
+infrastrukturą komunikacyjną i niższym poziomem bezpieczeństwa. PC3
+można więc interpretować jako miarę ``sprawności'' i ``jakości życia
+codziennego''. Wysokie wyniki na tej składowej wskazują na obszary,
+gdzie infrastruktura transportowa jest dobrze rozwinięta, komunikacja
+jest efektywna, a mieszkańcy czują się bezpiecznie, co znacząco wpływa
+na komfort życia i potencjał gospodarczy.
+
+\begin{longtable}[t]{lr}
+\caption{\label{tab:zmiennosc-poszczegolnych-skladowych}Liczba składowych potrzebnych do wyjaśnienia 80% i 90% zmienności \label{tab:potrzebneSkladowe}}\\
+\toprule
+Poziom.wyjaśnionej.wariancji & Liczba.potrzebnych.składowych\\
+\midrule
+80\% & 7\\
+90\% & 10\\
+\bottomrule
+\end{longtable}
+
+Jak widać w tabeli
+
+\begin{longtable}[t]{lrr}
+\caption{\label{tab:tabelki-dla-skumulowanegoudzialu}Udział wariancji wyjaśnionej przez składniki główne}\\
+\toprule
+Składowa & Udział..proc. & Skumulowany.udział..proc.\\
+\midrule
+PC1 & 29.80 & 29.80\\
+PC2 & 15.16 & 44.96\\
+PC3 & 12.25 & 57.21\\
+PC4 & 7.65 & 64.86\\
+PC5 & 7.05 & 71.90\\
+\addlinespace
+PC6 & 5.65 & 77.55\\
+PC7 & 4.06 & 81.62\\
+PC8 & 3.90 & 85.52\\
+PC9 & 3.43 & 88.95\\
+PC10 & 2.50 & 91.45\\
+\addlinespace
+PC11 & 1.90 & 93.35\\
+PC12 & 1.71 & 95.06\\
+PC13 & 1.62 & 96.68\\
+PC14 & 1.11 & 97.79\\
+PC15 & 0.91 & 98.69\\
+\addlinespace
+PC16 & 0.73 & 99.42\\
+PC17 & 0.58 & 100.00\\
+\bottomrule
+\end{longtable}
+
+\end{document}

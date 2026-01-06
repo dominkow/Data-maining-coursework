@@ -1,0 +1,1090 @@
+\documentclass[11pt, a4paper]{article}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\usepackage[OT4]{polski}
+\usepackage[utf8]{inputenc}
+\usepackage[top=2.5cm, bottom=2.5cm, left=2cm, right=2cm]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage[colorlinks=true, linkcolor=blue]{hyperref}
+\usepackage{placeins}
+\usepackage[table]{xcolor}
+\usepackage{booktabs}
+\usepackage{hyperref}  
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+<<ustawienia_globalne, echo=FALSE, warning=FALSE, results = 'hide', message=FALSE>>=
+library(knitr)
+library(kableExtra)
+library(xtable)
+library(ggplot2)
+library(arules)
+library(gridExtra)
+library(e1071)
+library(tidyr)
+library(ggrepel)
+library(dplyr)
+library(plotly)
+library(webshot)
+library(plot3D)
+library(corrplot)
+library(titanic)
+library(cluster)
+library(MASS)
+library(factoextra)
+library(Cairo)
+knitr::opts_chunk$set(dev = "CairoPDF")
+
+install.packages("titanic")
+opts_chunk$set(fig.path='figure/', fig.align='center', fig.pos='H',fig.width=5, fig.height=4)
+@
+\begin{document}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\title{Lista druga}
+\author{Amelia Dorożko i Zofia Stępień \\ album 282259 i 282254}
+\maketitle
+\tableofcontents
+\newpage
+\section{Dyskretyzacja cech ciągłych}
+\subsection*{Dane}
+Zbiór danych \textbf{iris}, dostępny w pakiecie datasets w R, zawiera wyniki pomiarów trzech gatunków irysów: \textit{Iris setosa}, \textit{Iris versicolor} i \textit{Iris virginica}. Został opublikowany przez Ronalda Fishera w 1936 roku i jest klasycznym przykładem używanym w statystyce oraz uczeniu maszynowym.
+Zbiór danych zawiera \Sexpr{nrow(iris)} przypadków i \Sexpr{ncol(iris)} cech.Pomiary dotyczą długości oraz szerokości dwóch części kwiatu: działki kielicha (\textit{sepal}) i płatka (\textit{petal}), a także zmiennej określającej gatunek.
+Liczba obserwacji dla poszczególnych gatunków wynosi:
+<<kod3, echo=FALSE, warning=FALSE,results='asis'>>=
+dane <- iris  # Wczytanie danych iris
+obserwacje_gatunki <- as.data.frame(table(dane$Species))
+colnames(obserwacje_gatunki) <- c("Gatunek", "Ilość")
+
+kable_styling(
+  kable(obserwacje_gatunki, 
+        format = "latex",
+        caption = "Liczba obserwacji dla gatunków w zbiorze danych Iris", 
+        row.names = FALSE,
+        align = c("l", "c")),
+  bootstrap_options = c("striped", "bordered"),
+  latex_options = "HOLD_position"
+)
+
+@
+
+Poniżej przedstawiono tabelę opisującą zmienne w zbiorze danych:
+<<kod0, echo=FALSE, warning=FALSE, results="asis">>=
+
+tabela_zmienne <- data.frame(
+  indeks = seq_along(names(dane)),
+  "Nazwa zmiennej" = names(dane),
+  "Typ" = sapply(dane, class),
+  "Opis" = c(
+    "Długość działki kielicha (cm)",
+    "Szerokość działki kielicha (cm)",
+    "Długość płatka (cm)",
+    "Szerokość płatka (cm)",
+    "Gatunek irysa (setosa/versicolor/virginica)"
+  ), 
+  check.names = FALSE
+)
+
+kable_styling(
+  kable(tabela_zmienne, 
+        format = "latex",
+        caption = "Typy zmiennych w zbiorze danych Iris", 
+        row.names = FALSE,
+        align = c("c", "l", "l", "l")),
+  bootstrap_options = c("striped", "bordered", "hover"),
+  latex_options = "HOLD_position"
+) %>%
+  column_spec(4, width = "8cm", latex_column_spec = "p{8cm}")
+@
+
+
+\subsection{Wybór cech}
+W analizie danych, zwłaszcza w zadaniach związanych z klasyfikacją lub grupowaniem, kluczowe znaczenie ma identyfikacja cech, które najskuteczniej pozwalają na rozróżnienie poszczególnych klas lub grup. W niniejszym badaniu skupiamy się na analizie czterech cech roślin z rodzaju \textit{Iris}: długości i szerokości płatków (\textit{Petal Length}, \textit{Petal Width}) oraz długości i szerokości działek kielicha (\textit{Sepal Length}, \textit{Sepal Width}). Głównym celem jest ustalenie, które z tych zmiennych najlepiej nadają się do separacji gatunków \textit{Setosa}, \textit{Versicolor} oraz \textit{Virginica}.
+<<wskazniki, echo=FALSE, warning=FALSE, results="asis">>=
+wskazniki <- iris[, 1:4]
+stats_table <- data.frame(
+  Statystyka = c("Min", "Max", "Q1", "Mediana", "Średnia", "Q3", "Zakres", "Wariancja")
+)
+
+for (col in colnames(wskazniki)) {
+  X <- wskazniki[[col]]
+  stats <- c(
+    min(X, na.rm = TRUE),             
+    max(X, na.rm = TRUE),              
+    quantile(X, 0.25, na.rm = TRUE),  
+    median(X, na.rm = TRUE),           
+    mean(X, na.rm = TRUE),    
+    quantile(X, 0.75, na.rm = TRUE),   
+    diff(range(X, na.rm = TRUE)),      
+    var(X, na.rm = TRUE)              
+  )
+  stats_table[[col]] <- stats
+}
+
+kable(stats_table, 
+      position = "H",
+      caption = "Statystyki dla danych Iris", 
+      align = 'c',
+      format = "latex",
+      label = "tab:tabela3",
+      table.placement = "H",
+      digits = 3)
+
+@
+
+<<wskazniki_by_species, echo=FALSE, warning=FALSE, results="asis">>=
+library(knitr)
+library(dplyr)
+
+wskazniki <- iris[, c(1:4, 5)]
+for (species in unique(wskazniki$Species)) {
+  stats_table <- data.frame(
+    Statystyka = c("Min", "Max", "Q1", "Mediana", "Średnia", "Q3", "Zakres", "Wariancja")
+  )
+  
+  species_data <- wskazniki[wskazniki$Species == species, 1:4]
+  
+  for (col in colnames(species_data)) {
+    X <- species_data[[col]]
+    stats <- c(
+      min(X, na.rm = TRUE),             
+      max(X, na.rm = TRUE),              
+      quantile(X, 0.25, na.rm = TRUE),  
+      median(X, na.rm = TRUE),           
+      mean(X, na.rm = TRUE),    
+      quantile(X, 0.75, na.rm = TRUE),   
+      diff(range(X, na.rm = TRUE)),      
+      var(X, na.rm = TRUE)              
+    )
+    stats_table[[col]] <- stats
+  }
+  
+  species_label <- tolower(gsub(" ", "_", species))
+  kable(stats_table, 
+        caption = "Statystyki dla gatunku \\label{tab:statystyki_iris}",
+        label = paste0("tab:tabela3_", species_label),
+        align = 'c',
+        digits = 3,
+        format = "latex") %>%
+    print()
+}
+@
+Na podstawie przedstawionych statystyk opisowych dla zbioru danych Iris (Tabela~\ref{tab:tabela3}) można zaobserwować istotne różnice w charakterystyce badanych cech morfologicznych. Dane wyraźnie wskazują, że długość płatka (Petal.Length) jest zmienną o największej rozpiętości wartości (zakres 5.9 cm) i najwyższej wariancji (3.116), co świadczy o jej znacznym zróżnicowaniu między gatunkami.
+W przypadku cech związanych z działką kielicha obserwujemy odmienny wzorzec. Szerokość działki (Sepal.Width) wyróżnia się najmniejszą zmiennością (wariancja zaledwie 0.190) i umiarkowanym zakresem (2.4 cm), co sugeruje jej ograniczoną przydatność w różnicowaniu gatunków.
+Interesujące wnioski płyną z porównania mediany i średniej dla poszczególnych cech. W przypadku cech płatka obserwujemy wyraźne różnice między tymi miarami (dla Petal.Length mediana 4.35 vs średnia 3.758), co wskazuje na asymetryczny rozkład danych. Z kolei dla cech działki kielicha wartości mediany i średniej są zbliżone (np. dla Sepal.Width mediana 3.0 vs średnia 3.057), sugerując bardziej symetryczny rozkład.
+Te obserwacje mają kluczowe znaczenie dla wyboru cech w analizach klasyfikacyjnych. Wysoka zmienność i asymetria rozkładu cech płatka czynią je szczególnie wartościowymi dla separacji gatunków, podczas gdy cechy działki kielicha, zwłaszcza szerokość, mogą mieć ograniczoną wartość diagnostyczną. Wyniki te są spójne z powszechną wiedzą botaniczną, która wskazuje, że cechy płatków są zwykle bardziej zróżnicowane między gatunkami Iris niż cechy działek kielicha.
+<<petal.length, echo=FALSE, warning=FALSE,fig.cap="\\label{fig:rysunek 1}Wykresy rozrzutu dla poszczególnych zmiennych", fig.width=9, fig.height=7>>=
+pastelowe_kolory <- c("lightpink", "skyblue", "thistle") 
+x1 <- iris[,"Petal.Length"]
+n1 <- length(x1) 
+y1 <- runif(n1) 
+
+x2 <- iris[,"Petal.Width"]  
+n2 <- length(x2) 
+y2 <- runif(n2)
+
+x3 <- iris[,"Sepal.Length"] 
+n3 <- length(x3) 
+y3 <- runif(n3)
+
+x4 <- iris[,"Sepal.Width"] 
+n4 <- length(x4) 
+y4 <- runif(n4)
+
+par(mfrow = c(2,2), mar=c(4, 4, 3, 2), xpd = TRUE)
+plot(x1, y1, main="Długość płatka w zależności od gatunku", xlab="Petal.Length (cm)", ylab="y", 
+     col=pastelowe_kolory[iris$Species], pch=16)
+legend(x=7.12, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+
+plot(x2, y2, main="Szerokość płatka w zależności od gatunku", xlab="Petal.Width (cm)", ylab="y", 
+     col=pastelowe_kolory[iris$Species], pch=16)
+legend(x=2.62, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+ 
+plot(x3, y3, main="Długość działki kielicha w zależności od gatunku", xlab="Sepal.Length (cm)", ylab="y", 
+     col=pastelowe_kolory[iris$Species], pch=16)
+legend(x=8.05, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+
+plot(x4, y4, main="Szerokość działki kielicha w zależności od gatunku", xlab="Sepal.Width (cm)", ylab="y", 
+     col=pastelowe_kolory[iris$Species], pch=16)
+legend(x=4.5, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+@
+
+<<wykresy_pudełkowe, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:rysunek 2}Wykresy pudełkowe dla poszczególnych zmiennych", fig.width=9, fig.height=7>>=
+par(mfrow = c(2,2), mar=c(5, 4, 4, 6) + 0.1, xpd = TRUE)
+boxplot(x1 ~ iris$Species, col=pastelowe_kolory, main = "Rozkład długości płatków \n w zależności od gatunku",  xlab="Gatunek", ylab="Petal.Length (cm)")
+legend(x=3.52, y=max(x1), legend=levels(iris$Species), fill=pastelowe_kolory, xpd=TRUE, bty="n")
+
+boxplot(x2 ~ iris$Species, col=pastelowe_kolory, main="Rozkład szerokości płatków \n w zależności od gatunku", 
+        xlab="Gatunek", ylab="Petal.Width (cm)")
+legend(x=3.52, y=max(x2), legend=levels(iris$Species), fill=pastelowe_kolory, xpd=TRUE, bty="n")
+
+boxplot(x3 ~ iris$Species, col=pastelowe_kolory, main="Rozkład długości działki kielicha \n w zależności od gatunku", 
+        xlab="Gatunek", ylab="Sepal.Length (cm)")
+legend(x=3.52, y=max(x3), legend=levels(iris$Species), fill=pastelowe_kolory, xpd=TRUE, bty="n")
+
+boxplot(x4 ~ iris$Species, col=pastelowe_kolory, main="Rozkład szerokości działki kielicha \n w zależności od gatunku",
+        xlab="Gatunek", ylab="Sepal.Width (cm)")
+legend(x=3.52, y=max(x4), legend=levels(iris$Species), fill=pastelowe_kolory, xpd=TRUE, bty="n")
+@
+\subsubsection*{Zdolność do separacji gatunków}
+Po przeanalizowaniu wykresów rozrzutu~\ref{fig:rysunek 1}, zauważamy, że wartości dla poszczególnycch gatunków dla cechy \texttt{Petal.Length} są wyraźnie rozdzielone, a nakładanie się zakresów między gatunkami jest minimalne. Obserwowane wartości wykazują wyraźną separację międzygatunkową, gdzie poszczególne gatunki zajmują odrębne zakresy pomiarowe. Gatunek Setosa charakteryzuje się wartościami około 1.46 cm, Versicolor około 4.26 cm, podczas gdy Virginica osiąga znacząco wyższe wartości w zakresie 5.55 cm. Taka struktura rozkładu zapewnia naturalne granice dyskretyzacji, minimalizując obszary nakładania się wartości między gatunkami. Dodatkowo, znacząca rozpiętość wartości (od 1.0 do 6.9 cm) oraz systematyczna progresja pomiarów między kolejnymi gatunkami tworzą idealne warunki dla efektywnego podziału na przedziały dyskretne.
+ W przeciwieństwie do cechy określającej szerokość działki kielicha \texttt{Sepal.Width}, gdzie występuje znaczne nakładanie się wartości między gatunkami oraz duży rozrzut wartości wewnątrz każdego gatunku. Wysoka zmienność wewnątrzgatunkowa w połączeniu z brakiem wyraźnych punktów podziału znacząco utrudnia określenie optymalnych progów dyskretyzacji. W efekcie, próby podziału tej cechy na przedziały mogą prowadzić do niskiej jakości separacji gatunków.
+
+Przeprowadzona analiza jednoznacznie wskazuje na długość płatka jako najbardziej odpowiednią cechę do procesu dyskretyzacji w zbiorze danych \texttt{Iris}. Jej klarowna struktura rozkładu i dobra separacja gatunkowa kontrastują z właściwościami szerokości działki kielicha, która ze względu na duże podobieństwo wartości między gatunkami i brak wyraźnych granic, wykazuje znacznie mniejszą przydatność do tego typu analiz.
+
+\subsection{Porównanie nienadzorowanych metod dyskretyzacji}
+\subsubsection{Metody dyskretyzacji dla zmiennej \texttt{Pental.Length}}
+
+Zmienna \texttt{Petal.Length} z zestawu danych \texttt{iris} została poddana dyskretzyacji za pomocą czterech metod: equal width, equal frequency, k-means oraz fixed. Wyniki dyskretzyacji przedstawiono w tabelach poniżej.
+<<tabela_equal_width.petal, echo=FALSE, warning=FALSE, results='asis'>>=
+x1 <- iris$Petal.Length
+gatunki <- iris$Species
+# Equal width
+petal.length.equal.width <- discretize(x1, method = "interval", categories = 3)
+kable_styling(
+  kable(table(petal.length.equal.width, gatunki),
+        format = "latex",
+        caption = "Dyskretyzacja Petal.Length metodą Equal Width",
+        row.names = TRUE, 
+        align = c("c", "c", "c", "c")),
+  bootstrap_options = c("striped", "bordered", "hover"),  
+  latex_options = "HOLD_position"
+) %>%
+  column_spec(1, width = "4cm", latex_column_spec = "p{4cm}")
+@
+
+<<tabela_equal_freq.petal, echo=FALSE, warning=FALSE, results='asis'>>=
+# Equal frequency
+petal.length.equal.freq <- discretize(x1, method = "frequency", categories = 3)
+kable_styling(
+  kable(table(petal.length.equal.freq, gatunki),
+        format = "latex",
+        caption = "Dyskretyzacja Petal.Length metodą Equal Frequency",
+        row.names = TRUE, 
+        align = c("c", "c", "c", "c")),
+  bootstrap_options = c("striped", "bordered", "hover"),  
+  latex_options = "HOLD_position"
+) %>%
+  column_spec(1, width = "4cm", latex_column_spec = "p{4cm}")
+@
+
+<<tabela_kmeans.petal, echo=FALSE, warning=FALSE, results='asis'>>=
+# K-means
+petal.length.k.means <- discretize(x1, method = "cluster", categories = 3)
+kable_styling(
+  kable(table(petal.length.k.means, gatunki),
+        format = "latex",
+        caption = "Dyskretyzacja Petal.Length metodą grupowania (k-means)",
+        row.names = TRUE, 
+        align = c("c", "c", "c", "c")),
+  bootstrap_options = c("striped", "bordered", "hover"),  
+  latex_options = "HOLD_position"
+) %>%
+  column_spec(1, width = "4cm", latex_column_spec = "p{4cm}")
+@
+
+<<tabela_fixed.petal, echo=FALSE, warning=FALSE, results='asis'>>=
+# Fixed
+petal.length.user <- cut(x1, breaks = c(1.0, 2.5, 4.8, 6.9), include.lowest = TRUE, right = FALSE)
+kable_styling(
+  kable(table(petal.length.user, gatunki),
+        format = "latex",
+        caption = "Dyskretyzacja Petal.Length metodą fixed",
+        row.names = TRUE, 
+        align = c("c", "c", "c", "c")),
+  bootstrap_options = c("striped", "bordered", "hover"),  
+  latex_options = "HOLD_position"
+) %>%
+  column_spec(1, width = "4cm", latex_column_spec = "p{4cm}")
+@
+
+<<histogram_petal, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:hist_petal}Histogramy dyskretyzacji dla Petal.Length ", fig.width=6, fig.height=5>>=
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
+hist(x1, breaks = 10, col = "skyblue", main = "Equal Width (Petal.Length)", xlab = "Petal.Length", ylab = "Częstość", cex.main = 0.9, xlim = c(1, 7), ylim = c(0, 40))
+petal.length.breaks.equal.width <- attributes(petal.length.equal.width)$"discretized:breaks"
+abline(v = petal.length.breaks.equal.width, col = "red", lwd = 2)
+
+hist(x1, breaks = 10, col = "skyblue", 
+     main = "Equal freq (Petal.Length)", 
+     xlab = "Petal.length", ylab = "Częstość", 
+     cex.main = 0.9, xlim = c(1, 7), ylim = c(0, 40))
+
+petal.length.breaks.equal.freq <- attributes(petal.length.equal.freq)$"discretized:breaks"
+abline(v = attributes(petal.length.equal.freq)$"discretized:breaks", col = "red", lwd = 2)
+hist(x1, breaks = 10, col = "skyblue", main = "k-Means (Petal.Length)", xlab = "Petal.Length", ylab = "Częstość", cex.main = 0.9, xlim = c(1, 7), ylim = c(0, 40))
+petal.length.breaks.k.means <- attributes(petal.length.k.means)$"discretized:breaks"
+abline(v = petal.length.breaks.k.means, col = "red", lwd = 2)
+
+hist(x1, breaks = 10, col = "skyblue", 
+     main = "Metoda:fixed", 
+     xlab = "Petal.length", ylab = "Częstość", 
+     cex.main = 0.9, xlim = c(1, 7), ylim = c(0, 40))
+breaks.user <-c(1.0, 2.5, 4.8, 6.9)
+abline(v = breaks.user, col = "red", lwd=2)
+
+@
+
+<<rozrzutu.pental, echo=FALSE, warning=FALSE,  fig.cap="\\label{fig:rozrzut_petal}Wykresy rozrzutu dyskretyzacji dla Petal.Length ", fig.width=10, fig.height=8>>=
+par(mfrow = c(2,2), mar=c(4, 4, 4, 5))
+plot(x1, y1, col = pastelowe_kolory[iris$Species], main = "Equal Width (Petal.Length)", xlab="Petal.Length (cm)", pch = 16)
+abline(v = petal.length.breaks.equal.width, col = "red", lwd=3)
+legend(x=7.12, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+
+plot(x1, y1, col = pastelowe_kolory[iris$Species], main = "Equal Freq (Petal.Length)", xlab="Petal.Length (cm)", pch = 16)
+abline(v = petal.length.breaks.equal.freq, col = "red", lwd=3)
+legend(x=7.12, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+
+plot(x1, y1, col = pastelowe_kolory[iris$Species], main = "K-means (Petal.Length)", xlab="Petal.Length (cm)",  pch = 16)
+abline(v = petal.length.breaks.k.means, col = "red", lwd=3)
+legend(x=7.12, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+
+plot(x1, y1, col = pastelowe_kolory[iris$Species], main = "Fixed (Petal.Length)", xlab="Petal.Length (cm)", pch = 16)
+abline(v = c(1.0, 2.5, 4.8, 6.9), col = "red", lwd=3)
+legend(x=7.12, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+@
+
+<<plot.petal, echo=FALSE, warning=FALSE,  fig.cap="\\label{fig:plot_petal}Diagramy punktowe dyskretyzacji dla Petal.Length ", fig.width=9, fig.height=7>>=
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+plot(iris$Species ~ petal.length.equal.width,
+     col = c("skyblue", "lightpink", "thistle"),
+     main = "Equal Width (Petal.Length)",
+     xlab = "Przedziały dyskretyzacji", ylab = "")
+
+plot(iris$Species ~ petal.length.equal.freq,
+     col = c("skyblue", "lightpink", "thistle"),
+     main = "Equal Freq (Petal.Length)",
+     xlab = "Przedziały dyskretyzacji", ylab = "")
+
+plot(iris$Species ~ petal.length.k.means,
+     col = c("skyblue", "lightpink", "thistle"),
+     main = "K-means (Petal.Length)",
+     xlab = "Przedziały dyskretyzacji", ylab = "")
+
+plot(iris$Species ~ petal.length.user,
+     col = c("skyblue", "lightpink", "thistle"),
+     main = "Fixed (Petal.Length)",
+     xlab = "Przedziały dyskretyzacji", ylab = "")
+@
+
+Z powyższych wykresów~\ref{fig:hist_petal} ~\ref{fig:rozrzut_petal} ~\ref{fig:plot_petal} można wywnioskować, że wszystkie metody skutecznie oddzielają gatunek setosa, przypisując go w całości do pierwszego przedziału, co świadczy o ich wysokiej skuteczności dla tej klasy. W przypadku versicolor i virginica obserwuje się niewielkie nakładanie się obserwacji w drugim i trzecim przedziale, ale różnice między metodami są minimalne. Na przykład, każda metoda prawidłowo klasyfikuje większość obserwacji versicolor i virginica, z liczbą błędnie przypisanych obserwacji nie przekraczającą kilku procent. Brak wyraźnego lidera wśród metod sugeruje, że wysoka zmienność \textit{Petal.Length} ułatwia skuteczną dyskretyzację niezależnie od algorytmu.
+
+\subsubsection{Metody dyskretyzacji dla zmiennej \texttt{Sepal.Width}}
+
+Zmienna \texttt{Sepal.Width} z zestawu danych \texttt{iris} została poddana dyskretzyacji za pomocą czterech metod: equal width, equal frequency, k-means oraz fixed. Wyniki dyskretzyacji przedstawiono w tabelach poniżej.
+<<tabele_dyskretyzacja_sepal.length, echo=FALSE, warning=FALSE>>=
+sepal.width.equal.width <- discretize(x4, method = "interval", categories = 3)
+sepal.width.equal.freq <- discretize(x4, method = "frequency", categories = 3)
+sepal.width.breaks <- attributes(sepal.width.equal.freq)$"discretized:breaks"
+
+kable_styling(
+  kable(table(sepal.width.equal.width, gatunki),
+        format = "latex",
+        caption = "Dyskretyzacja Sepal.Width metodą Equal Width",
+        row.names = TRUE, 
+        align = c("c", "c", "c", "c")),
+  bootstrap_options = c("striped", "bordered", "hover"),  
+  latex_options = "HOLD_position" 
+) %>%
+  column_spec(1, width = "4cm", latex_column_spec = "p{4cm}")
+
+kable_styling(
+  kable(table(sepal.width.equal.freq, gatunki),
+        format = "latex",
+        caption = "Dyskretyzacja Sepal.Width metodą Equal Frequency",
+        row.names = TRUE, 
+        align = c("c", "c", "c", "c")),
+  bootstrap_options = c("striped", "bordered", "hover"),  
+  latex_options = "HOLD_position" 
+) %>%
+  column_spec(1, width = "4cm", latex_column_spec = "p{4cm}") 
+
+sepal.width.k.means <- discretize(x4, method = "cluster",categories = 3)
+kable_styling(
+  kable(table(sepal.width.k.means, gatunki),
+        format = "latex",
+        caption = "Dyskretyzacja Sepal.Width metodą grupowania (k-means)",
+        row.names = TRUE, 
+        align = c("c", "c", "c", "c")),
+  bootstrap_options = c("striped", "bordered", "hover"),  
+  latex_options = "HOLD_position" 
+) %>%
+  column_spec(1, width = "4cm", latex_column_spec = "p{4cm}") 
+par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
+
+sepal.width.user <- cut(x4, breaks = c(2.0, 3.0, 3.4, 4.4), include.lowest = TRUE, right = FALSE)
+kable_styling(
+  kable(table(sepal.width.user, gatunki),
+        format = "latex",
+        caption = "Dyskretyzacja Sepal.Width metodą fixed",
+        row.names = TRUE, 
+        align = c("c", "c", "c", "c")),
+  bootstrap_options = c("striped", "bordered", "hover"),  
+  latex_options = "HOLD_position" 
+) %>%
+  column_spec(1, width = "4cm", latex_column_spec = "p{4cm}") 
+@
+
+<<histogram_sepal, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:hist_sepal}Histogramy dyskretyzacji dla Sepal.Width ", fig.width=6, fig.height=5>>=
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
+hist(x4, breaks = 10, col = "skyblue", main = "Equal Width (Sepal.Width)", xlab = "Sepal.Width", ylab = "Częstość", cex.main = 0.9, xlim = c(2, 4.5), ylim = c(0, 40))
+sepal.width.breaks.equal.width <- attributes(sepal.width.equal.width)$"discretized:breaks"
+abline(v = sepal.width.breaks.equal.width, col = "red", lwd = 2)
+
+hist(x4, breaks = 10, col = "skyblue", 
+     main = "Equal freq (Sepal.Width)", 
+     xlab = "Sepal width", ylab = "Częstość", 
+     cex.main = 0.9, xlim = c(2, 4.5), ylim = c(0, 40))
+abline(v = attributes(sepal.width.equal.freq)$"discretized:breaks", col = "red", lwd = 2)
+
+hist(x4, breaks = 10, col = "skyblue", main = "k-Means (Sepal.Width)", xlab = "Sepal.Width", ylab = "Częstość", cex.main = 0.9, xlim = c(2, 4.5), ylim = c(0, 40))
+sepal.width.breaks.k.means <- attributes(sepal.width.k.means)$"discretized:breaks"
+abline(v = sepal.width.breaks.k.means, col = "red", lwd = 2)
+
+hist(x4, breaks = 10, col = "skyblue", 
+     main = "Metoda:fixed", 
+     xlab = "Sepal.width", ylab = "Częstość", 
+     cex.main = 0.9, xlim = c(2, 4.5), ylim = c(0, 40))
+breaks.user <- c(2.0, 3.0, 3.4, 4.4)
+abline(v = breaks.user, col = "red", lwd=2)
+@
+
+<<rozrzutu_sepal, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:rozrzut_sepal}Wykresy rozrzutu dyskretyzacji dla Sepal.Width ", fig.width=10, fig.height=8>>=
+par(mfrow = c(2, 2), mar = c(4, 4, 4, 5))
+
+plot(x4, y4, col = pastelowe_kolory[iris$Species], main = "Equal Width (Sepal.Width)", xlab="Sepal.Width (cm)", ylab="y", pch = 16)
+abline(v = sepal.width.breaks.equal.width, col = "red", lwd=3)
+legend(x=4.52, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+
+plot(x4, y4, col = pastelowe_kolory[iris$Species], main = "Equal Freq (Sepal.Width)", xlab="Sepal.Width (cm)", ylab="y", pch = 16)
+abline(v = sepal.width.breaks, col = "red", lwd=3)
+legend(x=4.55, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+
+plot(x4, y4, col = pastelowe_kolory[iris$Species], main = "K-means (Sepal.Width)", xlab="Sepal.Width (cm)", ylab="y", pch = 16)
+abline(v = sepal.width.breaks.k.means, col = "red", lwd=3)
+legend(x=4.52, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+
+plot(x4, y4, col = pastelowe_kolory[iris$Species], main = "Fixed (Sepal.Width)", xlab="Sepal.Width (cm)", ylab="y", pch = 16)
+abline(v =  c(2.0, 3.0, 3.4, 4.4), col = "red", lwd=3)
+legend(x=4.52, y=1, legend=levels(iris$Species), col=pastelowe_kolory, pch=16, xpd=TRUE, bty="n")
+@
+
+<<plot.sepal, echo=FALSE, warning=FALSE,  fig.cap="\\label{fig:plot_sepal}Diagramy punktowe dyskretyzacji dla Sepal.Width ", fig.width=9, fig.height=7>>=
+par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+plot(iris$Species ~ sepal.width.equal.width,
+     col = c("skyblue", "lightpink", "thistle"),
+     main = "Equal Width (Sepal.Width)",
+     xlab = "Przedziały dyskretyzacji", ylab = "")
+
+plot(iris$Species ~ sepal.width.equal.freq,
+     col = c("skyblue", "lightpink", "thistle"),
+     main = "Equal Freq (Sepal.Width)",
+     xlab = "Przedziały dyskretyzacji", ylab = "")
+
+plot(iris$Species ~ sepal.width.k.means,
+     col = c("skyblue", "lightpink", "thistle"),
+     main = "K-means (Sepal.Width)",
+     xlab = "Przedziały dyskretyzacji", ylab = "")
+
+plot(iris$Species ~ sepal.width.user,
+     col = c("skyblue", "lightpink", "thistle"),
+     main = "Fixed (Sepal.Width)",
+     xlab = "Przedziały dyskretyzacji", ylab = "")
+@
+Z powyższych wykresów~\ref{fig:hist_sepal} ~\ref{fig:rozrzut_sepal} ~\ref{fig:plot_sepal} można wywnioskować, że w przeciwieństwie do \textit{Petal.Length}, dyskretyzacja \textit{Sepal.Width} jest znacznie mniej skuteczna. Niska zmienność tej cechy powoduje duże nakładanie się wszystkich trzech gatunków w każdym przedziale, niezależnie od metody, co uniemożliwia wyraźną separację klas. Wyniki dla \textit{Sepal.Width} są istotnie gorsze, co potwierdza kluczową rolę wyboru cech o wysokim zróżnicowaniu dla skutecznej dyskretyzacji.
+
+
+
+\section{Analiza składowych głównych}
+\subsection*{Dane}
+
+Zbiór danych \textbf{City Quality of Life}, dostępny na platformie Kaggle, zawiera wskaźniki opisujące jakość życia w wybranych miastach świata. Wszystkie cechy ilościowe przyjmują wartości w zakresie od 0 do 10, gdzie wyższe wartości oznaczają lepszą ocenę danej kategorii. Oprócz ocen jakości życia, dane zawierają także informacje o lokalizacji geograficznej każdego miasta, w tym kontynent (UA\_Continent) oraz kraj (UA\_Country).
+
+<<dane2, echo=FALSE, warning=FALSE>>=
+dane2 <- read.csv(file="C:/Users/ewasz/Downloads/uaScoresDataFrame.csv", stringsAsFactors = TRUE)
+
+#dane2 <- read.csv(file="C:/Users/admin/Desktop/eksploracja_danych/uaScoresDataFrame.csv", stringsAsFactors = TRUE)
+@
+
+Zbiór danych zawiera \Sexpr{nrow(dane2)} przypadków i \Sexpr{ncol(dane2)} cech oraz nie posiada brakujących wartości.
+<<brakujace, echo=FALSE, warning=FALSE>>=
+#sum(is.na(dane2))
+@
+
+Poniżej przedstawiono tabelę opisującą zmienne w zbiorze danych:
+<<tabela2, echo=FALSE, warning=FALSE>>=
+tabela_zmienne2 <- data.frame(
+  indeks = seq_along(names(dane2)),
+  "Nazwa zmiennej" = names(dane2),
+  "Typ" = sapply(dane2, class),
+  "Opis" = c(
+    "Liczba porządkowa",
+    "Nazwa miasta",
+    "Nazwa kraju",
+    "Nazwa kontynentu",
+    "Warunki mieszkaniowe",
+    "Koszty utrzymania",
+    "Aktywność startupowa",
+    "Dostępność kapitału inwestycyjnego",
+    "Łączność komunikacyjna",
+    "Dojazd do pracy",
+    "Wolność gospodarcza",
+    "Bezpieczeństwo",
+    "Opieka zdrowotna",
+    "Edukacja",
+    "Jakość środowiska",
+    "Stan gospodarki",
+    "System podatkowy",
+    "Dostęp do internetu",
+    "Czas wolny i kultura",
+    "Tolerancja",
+    "Dostępność aktywności na świeżym powietrzu"
+  )[1:length(names(dane2))],
+  check.names = FALSE
+)
+
+kable_styling(
+  kable(tabela_zmienne2,
+        format = "latex",
+        caption = "Typy zmiennych w zbiorze danych City Quality of Life",
+        row.names = FALSE,
+        align = c("c", "l", "l", "l")),
+  bootstrap_options = c("striped", "bordered", "hover"),
+  latex_options = "HOLD_position"
+) %>%
+  column_spec(4, width = "8cm", latex_column_spec = "p{8cm}")
+@
+
+W zbiorze danych mamy cechę pełniącą rolę liczby porządkowej (X), dlatego przed dalsza analizą usuwamy ją.
+<<usuwanie_X, echo=FALSE, warning=FALSE>>=
+dane2 <- dane2[, !names(dane2) %in% c("X")]
+@
+
+Z naszego zbioru wybieramy dane ilościowe. 
+<<cechy_ilosciowe, echo=FALSE, warning=FALSE>>=
+dane2_num <- dane2[sapply(dane2, is.numeric)]
+@
+Wybrane zmienne ilościowe obejmują 17 cech. Aby ocenić zmienność poszczególnych cech, obliczono ich wariancje, które zestawiono w tabeli poniżej. Wartości wariancji wahają się od 2.196 (dla \textit{Healthcare}) do 6.520 (dla \textit{Venture.Capital}), co wskazuje na zróżnicowany poziom rozproszenia danych między zmiennymi.
+
+<<wariancje_tabela, echo=FALSE, warning=FALSE>>=
+wariancje <- apply(dane2_num, 2, var)
+
+tabela_wariancje <- data.frame(
+  "Nazwa zmiennej" = names(wariancje),
+  "Wariancja" = round(as.numeric(wariancje), 3) 
+)
+
+kable_styling(
+  kable(tabela_wariancje,
+        format = "latex",
+        caption = "Wariancje poszczególnych zmiennych ilościowych",
+        col.names = c("Zmienna", "Wariancja"),
+        align = c("l", "c"),
+        row.names = FALSE),
+  bootstrap_options = c("striped", "bordered", "hover"),
+  latex_options = "HOLD_position"
+)
+@
+
+
+<<wariancje_wykresy, echo=FALSE, warning=FALSE,  fig.cap="\\label{fig:boxplot_zmienne}Wykresy pudełkowe zmienności cech", fig.width=9, fig.height=4>>=
+par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
+
+boxplot(dane2_num, las = 2, main = "Rozkład cech ilościowych", col = "lightpink", cex.axis = 0.5)
+
+dane2_num_stand <- scale(dane2_num, center = TRUE, scale = TRUE)
+
+boxplot(dane2_num_stand, las = 2, main = "Rozkład cech ilościowych po standaryzacji", col = "lightpink", cex.axis = 0.5)
+@
+
+Dla lepszego zrozumienia rozkładu i zmienności cech ilościowych, przygotowano wykresy pudełkowe przed i po standaryzacji~\ref{fig:boxplot_zmienne}, które pozwalają na wizualną ocenę rozproszenia, mediany oraz potencjalnych wartości odstających. Analiza wykresów pudełkowych ujawniła, że różnice w skali i rozproszeniu między zmiennymi są wyraźne, co podkreśla konieczność dalszej oceny pod kątem standaryzacji. Bez standaryzacji zmienne o większym rozproszeniu, takie jak \textit{Venture.Capital}, mogłyby przesłonić wkład zmiennych o mniejszej zmienności, takich jak \textit{Healthcare}, co prowadziłoby do zniekształconych wniosków.
+
+\subsection{Wyznaczenie składowych głównych}
+
+Analiza składowych głównych (PCA) została przeprowadzona na standaryzowanym podzbiorze danych ilościowych ze zbioru "City Quality of Life" w celu redukcji wymiarowości i identyfikacji kluczowych wzorców zmienności. Proces ten umożliwił przekształcenie 17 oryginalnych zmiennych ilościowych w zestaw nowych, nieskorelowanych zmiennych – składowych głównych (PC).
+
+<<skladowe_wykresy, echo=FALSE, warning=FALSE,  fig.cap="\\label{fig:boxplotPCA}Wykresy pudełkowe zmienności PC", fig.width=9, fig.height=4>>=
+par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
+pca <- prcomp(dane2_num_stand, center = TRUE, scale. = TRUE)
+
+boxplot(pca$x, col = "skyblue")
+title("Wykresy pudłkowe dla składowych głównych")
+
+# Wykres rozrzutu składowych głównych
+boxplot(pca$x[,1:4], 
+        main = "Rozrzut wybranych składowych głównych",
+        col = c("skyblue", "thistle", "lightpink", "peachpuff"),
+        names = c("PC1", "PC2", "PC3", "PC4"))
+@
+
+Rozrzut składowych głównych przedstawiono za pomocą wykresów pudełkowych (wszystkich skłaowych oraz osobno pierwszych czterech dla lepszej widoczności)~\ref{fig:boxplotPCA}. Wykresy te pokazują rozkład wartości każdej składowej w zbiorze danych. Pierwsza składowa główna (PC1) charakteryzuje się największym rozstępem międzykwartylowym i szerokimi wąsami, co wskazuje na znaczną zmienność w tym kierunku. W kolejnych składowych widać tendencję do zmniejszania rozrzutu, węższych pudełek i krótszych wąsów, co odzwierciedla bardziej skoncentrowany rozkład. 
+
+
+Wektory ładunków zostały przeanalizowane dla trzech pierwszych składowych (PC1, PC2, PC3), aby określić, które zmienne mają największy wkład w ich konstrukcję. Wyniki przedstawiono w tabelach poniżej.
+
+<<tabele_pc, echo=FALSE, warning=FALSE>>=
+# Funkcja do tworzenia tabeli ładunków
+tabela_ladunkow <- function(skladowa, podpis) {
+  ladunki <- data.frame(
+    Zmienna = rownames(pca$rotation),
+    Ładunek = round(pca$rotation[, skladowa], 3)
+  )
+  
+  ladunki <- ladunki[order(-abs(ladunki$Ładunek)), ]
+  
+  kable(head(ladunki, 5), 
+        caption = podpis,
+        align = c("l", "r")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover"),
+                  latex_options = "HOLD_position")
+}
+
+# Tworzenie tabeli ładunków dla poszczególnych składowych
+tabela_ladunkow(1, "Zmienne o największym wkładzie dla PC1")
+tabela_ladunkow(2, "Zmienne o największym wkładzie dla PC2")
+tabela_ladunkow(3, "Zmienne o największym wkładzie dla PC3")
+@
+
+Pierwsza składowa zdaje się odzwierciedlać ogólny poziom rozwoju społeczno-ekonomicznego i jakości życia. Ujemne ładunki \textit{Education}, \textit{Business.Freedom} i \textit{Environmental.Quality} wskazują, że miasta z wyższymi wartościami tych cech mają niższe wartości PC1. Dodatni ładunek \textit{Housing}  sugeruje, że wyższe koszty lub gorsze warunki mieszkaniowe zwiększają wartość PC1, co może odróżniać miasta o wysokim standardzie życia od tych bardziej przystępnych cenowo.
+
+PC2 wydaje się kontrastować dynamikę innowacyjności z otwartością społeczną. Ujemne ładunki \textit{Startups} i \textit{Venture.Capital} wskazują, że miasta z wysoką aktywnością startupową i dostępnością kapitału inwestycyjnego mają niższe wartości PC2, co może opisywać centra technologiczne. Dodatni ładunek \textit{Tolerance} i \textit{Safety} sugeruje, że wyższe wartości PC2 odpowiadają miastom bardziej tolerancyjnym i bezpiecznym, odróżniając je od tych skoncentrowanych na biznesie.
+
+PC3 zdaje się związana z dostępnością komunikacyjną i kosztami życia. Ujemne ładunki \textit{Commute} i \textit{Travel.Connectivity} wskazują, że krótszy czas dojazdu i lepsza łączność transportowa obniżają wartości PC3, co może charakteryzować dobrze zorganizowane metropolie. Ujemne ładunki \textit{Cost.of.Living} i \textit{Housing} sugerują, że wyższe koszty życia i mieszkaniowe również obniżają PC3, wyróżniając droższe miasta od tańszych lokalizacji.
+
+
+\subsection{Zmienność odpowiadająca poszczególnym składowym
+}
+W ramach analizy składowych głównych zbadano, jaki procent całkowitej wariancji danych "City Quality of Life" jest wyjaśniany przez poszczególne składowe główne. Pozwala to ocenić, jak dużo informacji o zmienności oryginalnych 17 zmiennych ilościowych przechowuje każda składowa oraz ile składowych jest potrzebnych do uchwycenia większości tej zmienności. Wartości wariancji wyjaśnionej przez poszczególne składowe oraz skumulowanej wariancji wyjaśnionej przedstawiono w tabeli poniżej.
+
+<<zmiennosc_skladowych_tabela, echo=FALSE, warning=FALSE>>=
+wariancja <- 100*(pca$sdev^2)/sum(pca$sdev^2)
+skumulowana_wariancja <- cumsum(wariancja)
+
+tabela_wariancji <- data.frame(
+  Składowa = paste0("PC", 1:length(wariancja)),
+  `% Wariancji` = paste0(round(wariancja, 1), "%"),
+  `% Skumulowany` = paste0(round(skumulowana_wariancja, 1), "%"),
+  check.names = FALSE
+)
+
+kable(tabela_wariancji[1:10, ], 
+      caption = "Procent wyjaśnionej wariancji przez składowe główne",
+      align = c("c", "c", "c")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = FALSE,
+                latex_options = "HOLD_position")
+@
+
+Każda składowa główna wnosi określony udział do wyjaśnienia całkowitej zmienności danych. Pierwsza składowa (PC1) odpowiada za 29.8\% wariancji, co czyni ją najbardziej znaczącą w opisie różnic między miastami. Druga składowa (PC2) wyjaśnia 15.2\%, a trzecia (PC3) – 12.2\%. Kolejne składowe mają coraz mniejszy udział. Malejący trend w wartościach procentowych wskazuje, że większość zmienności koncentruje się w pierwszych kilku składowych, podczas gdy wyższe składowe dodają coraz mniej informacji.
+
+<<zmiennosc_skladowych_wykresy, echo=FALSE, warning=FALSE,  fig.cap="\\label{fig:wariancjaPCA}Wykresy przedstawiające skumulowaną wariancję wyjaśnioną", fig.width=9, fig.height=4>>=
+par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
+
+barplot(skumulowana_wariancja, main="Skumulowana wariancja (w %)", names.arg=paste0("PC",1:17), col = "skyblue")
+abline(h=80, col="lightpink", lty=2, lwd=2)
+abline(h=90, col="thistle", lty=2, lwd=2)
+legend("right", legend=c("80%","90%"), lwd=2, lty=2, col=c("lightpink","thistle"))
+
+plot(skumulowana_wariancja, 
+     type = "b",
+     main = "Skumulowana wariancja (w %)",
+     ylab = "Procent wyjaśnionej wariancji",
+     xlab = "Liczba składowych",
+     col = "skyblue")
+abline(h=80, col="lightpink", lty=2, lwd=2)
+abline(h=90, col="thistle", lty=2, lwd=2)
+legend("right", legend=c("80%","90%"), lwd=2, lty=2, col=c("lightpink","thistle"))
+@
+Wykresy skumulowanej wariancji~\ref{fig:wariancjaPCA} obrazują, jak rośnie łączny procent wyjaśnionej wariancji po uwzględnieniu kolejnych składowych. Na przykład, PC1 i PC2 razem wyjaśniają 45\% wariancji, a dodanie PC3 zwiększa ten wynik do 57.2\%. Dalsze składowe stopniowo podnoszą skumulowaną wartość, co pozwala na precyzyjne określenie liczby składowych potrzebnych do osiągnięcia założonych progów zmienności.
+
+Do wyjaśnienia 80\% wariancji potrzeba \Sexpr{which(skumulowana_wariancja >= 80)[1]} składowych głównych.
+Do wyjaśnienia 90\% wariancji potrzeba \Sexpr{which(skumulowana_wariancja >= 90)[1]} składowych głównych.
+
+\subsection{Wizualizacja danych wielowymiarowych}
+W celu wizualizacji danych wielowymiarowych ze zbioru "City Quality of Life" wykorzystano składowe główne wyznaczone w poprzednich etapach analizy. Przygotowano wykresy rozrzutu dla pierwszych dwóch składowych głównych (PC1 i PC2) oraz dla trzech pierwszych składowych (PC1, PC2, PC3), co pozwala na ocenę podobieństwa między miastami w zredukowanej przestrzeni wymiarowej.
+
+
+<<wykres_2D, fig.width=10, fig.height=7, out.width='0.9\\textwidth', echo = FALSE, warning= FALSE, fig.cap="\\label{fig:2D_PCA}Wykres rozrzutu 2D">>=
+par(bg = "white", mar = c(5, 4, 4, 2) + 0.1, xpd = TRUE)
+
+dane_pca <- data.frame(pca$x[,1:3]) 
+dane_pca$Miasto <- dane2$UA_Name
+dane_pca$Kontynent <- dane2$UA_Continent
+dane_pca$Kraj <- dane2$UA_Country
+dane_pca$Miasto_skrot <- substr(dane_pca$Miasto, 1, 2)
+
+
+pastel_palette <- c(
+  "Africa" = "lightpink",
+  "Asia" = "skyblue",
+  "Europe" = "thistle",
+  "North America" = "lightgreen",
+  "South America" = "peachpuff",
+  "Oceania" = "lavender"
+)
+
+
+plot(dane_pca$PC1, dane_pca$PC2,
+     col = pastel_palette[as.character(dane_pca$Kontynent)], 
+     pch = 16,  
+     cex = 1.5, 
+     xlab = "PC1",
+     ylab = "PC2",
+     main = "Wykres rozrzutu dla dwóch pierwszych składowych",
+     cex.main = 1.5)
+
+text(dane_pca$PC1, dane_pca$PC2 + 0.2, 
+     labels = dane_pca$Miasto_skrot,
+     col = "black", 
+     cex = 0.8)   
+
+legend("bottom", 
+       legend = names(pastel_palette), 
+       col = pastel_palette, 
+       pch = 16, 
+       horiz = TRUE,  
+       bty = "n",  
+       inset = c(0, -0.2)) 
+@
+
+Dwuwymiarowy wykres rozrzutu dla PC1 i PC2~\ref{fig:2D_PCA} ukazuje rozkład miast w przestrzeni zdefiniowanej przez dwie najważniejsze składowe. Na osi poziomej (PC1) miasta różnią się pod względem ogólnego poziomu rozwoju społeczno-ekonomicznego i jakości życia (zgodnie z interpretacją z 2.1), podczas gdy oś pionowa (PC2) odzwierciedla kontrast między dynamiką innowacyjności a otwartością społeczną. Analiza wykresu pozwala zauważyć, że miasta położone blisko siebie na wykresie, np. w centralnej części, wykazują podobne profile jakości życia, co sugeruje zrównoważone wartości cech takich jak edukacja, wolność gospodarcza, warunki mieszkaniowe czy aktywność startupowa.
+Obiekty wydają się układać w luźne skupiska, które mogą odpowiadać różnicom kontynentalnym lub krajowym. Na przykład, miasta z Europy grupują się w obszarze o wyższych wartościach PC2. Miasta z Azji, Afryki i Ameryki Południowej grupują się w obszarze o wyższych wartościach PC1 podczas gdy miasta z Ameryki Północnej zajmują przestrzeń z niższymi wartościami.
+
+
+<<wykres_3D, fig.width=8, fig.height=8, out.width='0.9\\textwidth', echo = FALSE, warning= FALSE, fig.cap="\\label{fig:3D_PCA}Wykres rozrzutu 3D">>=
+par(bg = "white", mar = c(5, 4, 4, 2) + 0.1, xpd = TRUE)
+
+scatter3D(pca$x[,1], pca$x[,2], pca$x[,3], 
+          xlab = "PC1", 
+          ylab = "PC2", 
+          zlab = "PC3", 
+          colvar = as.numeric(dane2$UA_Continent), 
+          col = pastel_palette,                
+          pch = 16,                           
+          cex = 1.5,                              
+          colkey = FALSE,                          
+          main = "Wykres rozrzutu dla trzech pierwszych składowych",  
+          cex.main = 1.5,                       
+          theta = 40, phi = 20)        
+
+text3D(pca$x[,1], pca$x[,2], pca$x[,3], 
+       labels = dane_pca$Miasto_skrot,  
+       add = TRUE, 
+       col = "black",                   
+       cex = 0.6)                     
+
+legend("bottom", 
+       legend = names(pastel_palette), 
+       col = pastel_palette, 
+       pch = 16, 
+       horiz = TRUE,  
+       bty = "n",  
+       inset = c(0, -0.05))
+@
+
+Trójwymiarowy wykres rozrzutu dla PC1, PC2 i PC3~\ref{fig:3D_PCA} rozszerza analizę o dodatkowy wymiar, związany z dostępnością komunikacyjną i kosztami życia. Dodanie PC3 pozwala na bardziej szczegółowe rozróżnienie miast, które na wykresie 2D mogły wydawać się podobne. Na tym wykresie widoczne są wyraźniejsze separacje między grupami miast, co może wskazywać na ułożenie wynikające z kombinacji czynników, takich jak rozwój infrastruktury transportowej i poziom kosztów utrzymania. Na przykład, metropolie z Ameryki Północnej charakteryzują się wysoką wartością PC3, a z Azji- niską.
+
+\subsection*{Analiza wybranych miast}
+
+Trójwymiarowy wykres rozrzutu dla PC1, PC2 i PC3 rozszerza analizę o dodatkowy wymiar związany z dostępnością komunikacyjną i kosztami życia. Dodanie trzeciej składowej głównej pozwala na bardziej szczegółowe rozróżnienie miast, które na tradycyjnym wykresie dwuwymiarowym mogły wydawać się podobne. Na wykresie 3D obserwujemy wyraźniejsze separacje między grupami miast, co sugeruje istnienie ukrytych struktur wynikających z kombinacji różnych czynników, takich jak rozwój infrastruktury transportowej i poziom kosztów utrzymania. Przykładowo, metropolie z Ameryki Północnej charakteryzują się wysoką wartością PC3, podczas gdy miasta azjatyckie wykazują tendencję do niskich wartości tego parametru.
+
+\subsection*{Charakterystyka wybranych miast}
+
+\textbf{Londyn} (Europa) wyróżnia się położeniem w obszarze niskich wartości wszystkich trzech składowych głównych. Niska wartość PC1 odzwierciedla wysoki poziom edukacji, wolności gospodarczej i jakości środowiska, co jest charakterystyczne dla rozwiniętych europejskich metropolii. Niski wynik PC2 wskazuje na silną dynamikę innowacyjności, typową dla globalnego centrum biznesowego i technologicznego. Natomiast niska wartość PC3 potwierdza dobrą dostępność komunikacyjną przy jednocześnie wysokich kosztach życia, co idealnie pasuje do profilu Londynu jako miasta o doskonałej łączności, lecz znacznych kosztach utrzymania.
+
+\textbf{Hawana} (Ameryka Północna) sytuuje się w regionie wysokich wartości PC1 i PC2 oraz średnich PC3. Wysoki poziom PC1 sugeruje niższy stopień rozwoju społeczno-ekonomicznego, co odpowiada charakterystyce miasta o ograniczonym dostępie do nowoczesnych standardów. Podwyższona wartość PC2 wskazuje na mniejszą aktywność startupową, ograniczoną dostępność kapitału oraz potencjalnie niższą tolerancję społeczną. Średni wynik PC3 odzwierciedla zrównoważoną dostępność komunikacyjną przy umiarkowanych kosztach życia.
+
+\textbf{Stambuł} (Azja) zajmuje pozycję w obszarze średnich wartości PC1 i PC2 oraz niskich PC3. Średni poziom PC1 świadczy o zrównoważonym rozwoju społeczno-ekonomicznym, typowym dla dużych miast w fazie intensywnego rozwoju. Średnia wartość PC2 odpowiada pośredniemu poziomowi innowacyjności i otwartości społecznej, co koresponduje z rolą miasta jako ważnego centrum handlowego. Niski wynik PC3 potwierdza dobrą dostępność komunikacyjną, choć przy potencjalnie wysokich kosztach utrzymania, charakterystycznych dla dynamicznie rozwijających się metropolii.
+
+\subsection{Korelacja zmiennych}
+W celu zbadania korelacji między poszczególnymi zmiennymi ilościowymi ze zbioru "City Quality of Life" wykorzystano dwuwykres~\ref{fig:biplot}, który łączy wizualizację miast w przestrzeni pierwszych dwóch składowych głównych (PC1 i PC2) z wektorami reprezentującymi oryginalne zmienne. Biplot, przedstawiony, pozwala na ocenę siły i kierunku zależności między zmiennymi poprzez analizę kątów między wektorami oraz ich długości.
+
+<<biplot, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:biplot}Biplot przedstawiający korelację">>=
+
+fviz_pca_biplot(pca,
+                label = "var",         
+                col.ind = dane2$UA_Continent) +  
+  scale_color_manual(values = pastel_palette) +
+  ggtitle("PCA Biplot") +
+  theme(legend.position = "bottom")
+@
+Na biplocie~\ref{fig:biplot} można zaobserwować następujące zależności między zmiennymi:
+\begin{itemize}
+\item \textit{Leisure}, \textit{Culture} i \textit{Outdoors}: Wektory tych zmiennych są blisko siebie, tworząc mały kąt, co sugeruje silną dodatnią korelację. Miasta oferujące bogate możliwości spędzania czasu wolnego i kultury zazwyczaj charakteryzują się też wysoką dostępnością aktywności na świeżym powietrzu. Może to wskazywać na wspólny profil miast atrakcyjnych turystycznie lub o wysokim standardzie życia rekreacyjnego.
+\item \textit{Housing} i \textit{Cost.of.Living}: Wektory Housing i Cost.of.Living również układają się blisko siebie, co potwierdza ich silną dodatnią korelację. Wyższe wartości Housing współwystępują z wyższymi kosztami życia, co jest zgodne z intuicją – w droższych miastach koszty mieszkań i utrzymania korelują ze sobą.
+\item \textit{Venture.Capital} i \textit{Startups}: Wektory Venture.Capital i Startups są blisko siebie, wskazując na silną dodatnią korelację. Miasta z większą dostępnością kapitału inwestycyjnego zazwyczaj mają też wyższą aktywność startupową, co odzwierciedla zależność między finansowaniem a rozwojem innowacyjnych przedsiębiorstw.
+\item \textit{Environmental.Quality} i \textit{Healthcare}: Wektory Environmental.Quality i Healthcare układają się blisko siebie, tworząc mały kąt. Sugeruje to silną dodatnią korelację między tymi zmiennymi – miasta z wyższą jakością środowiska zazwyczaj charakteryzują się również lepszą opieką zdrowotną. Ta zależność może odzwierciedlać fakt, że czyste środowisko wspiera zdrowie mieszkańców, co jest typowe dla bardziej rozwiniętych i dbających o jakość życia regionów.
+\item \textit{Housing}, \textit{Cost.of.Living} i \textit{Taxation}: Wektory Housing, Cost.of.Living i Taxation są skierowane w prawo, podczas gdy pozostałe zmienne, kierują się w lewo. Taki układ wskazuje na dodatnią korelację w grupie po prawej (odzwierciedla to wspólny wzorzec metropolii, gdzie wysokie koszty utrzymania idą w parze z większym obciążeniem podatkowym) oraz ujemną korelację z grupą po lewej.
+\end{itemize}
+
+<<macierz_korelacji, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:macierz}Macierz korelacji">>=
+macierz_korelacji <- cor(dane2_num_stand)
+
+pastel_col <- colorRampPalette(c("lightpink", "white", "lightblue"))(200)
+
+corrplot(macierz_korelacji,
+         col = pastel_col,    
+         tl.col = "black",   
+         tl.cex = 0.9)
+@
+W celu zbadania korelacji między poszczególnymi zmiennymi wykorzystano także macierz korelacji~\ref{fig:macierz}, która przedstawia współczynniki korelacji Pearsona dla wszystkich par zmiennych. Umożliwia ona ocenę zależności między zmiennymi poprzez analizę wartości współczynników, gdzie wartości bliskie 1 wskazują na silną dodatnią korelację, bliskie -1 – na silną ujemną korelację, a bliskie 0 – na brak korelacji. Wnioski płynące z macierzy korelacji są zgodne z obserwacjami z biplotu, potwierdzając te same zależności między zmiennymi i ich strukturę w danych.
+
+
+\subsection{Końcowe wnioski}
+Analiza składowych głównych (PCA) przeprowadzona na zbiorze danych "City Quality of Life" pozwoliła na redukcję wymiarowości 17 zmiennych ilościowych oraz identyfikację kluczowych wzorców zmienności.
+
+\begin{itemize}
+
+\item \textbf{Wpływ standaryzacji}: Standaryzacja danych miała kluczowy wpływ na wyniki analizy. Niektóre zmienne charakteryzowały się zróżnicowanym rozproszeniem. Bez standaryzacji zmienne o większej wariancji mogłyby zdominować składowe główne, prowadząc do zniekształconych wniosków. Standaryzacja zapewniła równy wkład każdej zmiennej do PCA, co umożliwiło sprawiedliwą ocenę ich znaczenia i poprawną interpretację zależności, np. w biplocie i macierzy korelacji.
+
+  \item \textbf{Wyznaczenie składowych głównych}: Pierwsza składowa główna odzwierciedla ogólny poziom rozwoju społeczno-ekonomicznego, zdominowana przez zmienne takie jak \textit{Education}, \textit{Business.Freedom} i \textit{Housing}. PC2 kontrastuje innowacyjność (\textit{Startups}, \textit{Venture.Capital}) z otwartością społeczną (\textit{Tolerance}), a PC3 jest związana z dostępnością komunikacyjną (\textit{Commute}, \textit{Travel.Connectivity}) i kosztami życia. Te trzy składowe pozwoliły na interpretację głównych wymiarów różnicujących miasta.
+
+  \item \textbf{Zmienność składowych}: PC1 wyjaśnia 29.8\% wariancji, PC2 – 15.2\%, a PC3 – 12.2\%, co daje łącznie 57.2\% dla pierwszych trzech składowych. Do wyjaśnienia 80\% wariancji potrzeba 7 składowych, a 90\% – 10 składowych, co wskazuje, że dane są stosunkowo złożone i wymagają kilku wymiarów dla pełnej reprezentacji.
+  
+  \item \textbf{Wizualizacja danych}: Wykresy rozrzutu 2D i 3D ujawniły luźne skupiska miast, częściowo związane z lokalizacją geograficzną. Miasta europejskie często grupują się w obszarze wysokich wartości PC2, a azjatyckie – wysokich PC1.
+  
+  \item \textbf{Korelacja zmiennych}: Biplot i macierz korelacji potwierdziły silne dodatnie korelacje w grupach: \textit{Leisure}, \textit{Culture} i \textit{Outdoors}; \textit{Housing}, \textit{Cost.of.Living}; \textit{Venture.Capital}, \textit{Startups}, oraz \textit{Environmental.Quality} i \textit{Healthcare}. Grupa \textit{Housing}, \textit{Cost.of.Living}, \textit{Taxation} wykazuje ujemną korelację z pozostałymi zmiennymi, wskazując na kontrast między kosztami a rozwojem społeczno-ekonomicznym.
+  
+\end{itemize}
+
+
+
+\section{Skalowanie wielowymiarowe}
+
+\subsection{Opis danych}
+Zbiór danych \texttt{titanic\_train}, dostępny w pakiecie \texttt{titanic} w środowisku R, zawiera informacje o pasażerach Titanica, historycznego statku, który zatonął w 1912 roku. Dane pochodzą z popularnego konkursu na platformie Kaggle (\url{https://www.kaggle.com/c/titanic/data}) i obejmują wybrane charakterystyki opisujące pasażerów, takie jak wiek, płeć, klasa pasażerska, miejsce zaokrętowania, liczba rodzeństwa lub małżonków na pokładzie, liczba rodziców lub dzieci na pokładzie oraz opłata za bilet. Dodatkowo, zbiór zawiera zmienną \texttt{Survived}, wskazującą, czy dana osoba przeżyła katastrofę (0 = nie przeżyła, 1 = przeżyła), która w analizie może pełnić rolę zmiennej grupującej.
+<<wczytanie_danych, echo=FALSE, warning=FALSE>>=
+library(titanic)
+data("titanic_train")
+dane3 <- titanic_train
+# str(titanic_train)
+@
+Zbiór danych zawiera \Sexpr{nrow(dane3)} przypadków i \Sexpr{ncol(dane3)} cech.
+Poniżej przedstawiono tabelę opisującą zmienne w zbiorze danych:
+<<tabela_titanic, echo=FALSE, warning=FALSE>>=
+tabela_zmienne_titanic <- data.frame(
+  indeks = seq_along(names(dane3)),
+  "Nazwa zmiennej" = names(dane3),
+  "Typ" = sapply(dane3, class),
+  "Opis" = c(
+    "Identyfikator pasażera",
+    "Czy pasażer przeżył (0 = nie, 1 = tak)",
+    "Klasa pasażerska (1, 2, 3)",
+    "Imię i nazwisko pasażera",
+    "Płeć pasażera",
+    "Wiek pasażera",
+    "Liczba rodzeństwa/małżonków na pokładzie",
+    "Liczba rodziców/dzieci na pokładzie",
+    "Numer biletu",
+    "Opłata za bilet",
+    "Numer kabiny",
+    "Port zaokrętowania (C = Cherbourg, Q = Queenstown, S = Southampton)"
+  ),
+  check.names = FALSE
+)
+
+kable_styling(
+  kable(tabela_zmienne_titanic,
+        format = "latex",
+        caption = "Typy zmiennych w zbiorze danych Titanic",
+        row.names = FALSE,
+        align = c("c", "l", "l", "l")),
+  bootstrap_options = c("striped", "bordered", "hover"),
+  latex_options = "HOLD_position"
+) %>%
+  column_spec(4, width = "8cm", latex_column_spec = "p{8cm}")
+@
+W analizowanym zbiorze danych niektóre kolumny wymagają zmiany typu, aby lepiej odzwierciedlały swoją naturę statystyczną i ułatwiły poprawne modelowanie.
+
+Kolumna \texttt{Pclass}, choć zapisana jako liczbowa, w rzeczywistości oznacza klasę biletu (1, 2 lub 3) i ma charakter porządkowy – wyższa klasa (1) wskazuje na lepsze miejsce na statku. W związku z tym powinna zostać przekonwertowana na uporządkowaną zmienną kategoryczną (ordered factor), aby zachować tę hierarchię. Kolumna \texttt{Survived} reprezentuje binarną zmienną kategoryczną. Obecnie jest przechowywana w formacie numerycznym, jednak bardziej odpowiedni byłby typ factor, ponieważ wartości te nie mają charakteru ilościowego, a jedynie jakościowy. Kolumna \textt{Sex} przechowuje informację o płci pasażera w formacie tekstowym ("male", "female"). Ponieważ są to ściśle określone kategorie, właściwszym typem byłby factor, co ułatwiłoby analizę statystyczną i wizualizację danych. Podobnie kolumna\texttt{Embarked}, która zawiera kody portów zaokrętowania (C, Q, S), powinna zostać przekształcona na typ factor. Obecne przechowywanie jako tekst nie jest optymalne, ponieważ wartości te są kategoriami, a nie dowolnymi ciągami znaków. Zmiana typów tych zmiennych poprawi spójność danych.
+
+Chcąc przejść do dalszej analizy, sprawdzamy brakujące obserwacje. 
+<<brakujace2, echo=FALSE, warning=FALSE>>=
+#sprawdzenie liczbę brakujących wartości (NA)
+colSums(is.na(dane3))
+puste_liczby <- colSums(dane3 == "", na.rm = TRUE)
+kolumny_z_pustymi <- names(which(puste_liczby > 0))
+if(length(kolumny_z_pustymi) > 0) {
+  cat("Kolumny zawierające puste ciągi (\"\") oraz ich liczebność:\n")
+  for(kol in kolumny_z_pustymi) {
+    cat("- ", kol, ": ", puste_liczby[kol], " braków\n", sep = "")
+  }
+} else {
+  cat("Brak pustych ciągów (\"\") w zbiorze danych.\n")
+}
+@
+ W zbiorze danych \texttt{titanic\_train} występują brakujące wartości w kilku kolumnach, co wynika z historycznych ograniczeń w rejestracji informacji o pasażerach. Wiek (\texttt{Age}) nie był zawsze rejestrowany, szczególnie w przypadku dzieci bez dokumentów tożsamości lub pasażerów podróżujących bez rodzin. Dane o kabinach (\texttt{Cabin}) są dostępne głównie dla pasażerów 1. klasy, którzy mieli przypisane indywidualne kabiny, natomiast w 2. i 3. klasie informacje te są w większości nieobecne. Brakujące wartości w kolumnie \texttt{Embarked}, wskazującej miejsce rozpoczęcia podróży, są rzadkie i mogą wynikać z błędów rejestracji.
+
+W ramach przygotowania danych do analizy usunięto zmienne pełniące rolę identyfikatorów pasażerów, takie jak \texttt{PassengerId}, \texttt{Name}, \texttt{Ticket} oraz \texttt{Cabin}, ze względu na ich ograniczoną wartość informacyjną. Obserwacje z brakującymi wartościami w \texttt{Embarked} usunięto, ponieważ ich liczba była znikoma.
+<<nowa_tabela_zmienne_titanic, echo=FALSE, warning=FALSE>>=
+#Konwersja zmiennych
+dane3$Survived <- as.factor(dane3$Survived)
+dane3$Pclass <- as.ordered(dane3$Pclass)
+dane3$Sex <- as.factor(dane3$Sex)
+dane3$Embarked <- as.factor(dane3$Embarked)
+
+#Usunięcie kolumn identyfikujących pasażerów
+dane3 <- dane3[, !(names(dane3) %in% c("PassengerId", "Name", "Ticket", "Cabin"))]
+
+tabela_zmienne_titanic2 <- data.frame(
+  Indeks = seq_along(names(dane3)),
+  "Nazwa zmiennej" = names(dane3),
+  "Typ zmiennej" = sapply(titanic, function(x) paste(class(x), collapse = ", ")),
+  "Opis zmiennej" = c(
+    "Czy pasażer przeżył (0 = nie, 1 = tak)",
+    "Klasa pasażerska (1, 2, 3)",
+    "Płeć pasażera",
+    "Wiek pasażera",
+    "Liczba rodzeństwa/małżonków na pokładzie",
+    "Liczba rodziców/dzieci na pokładzie",
+    "Opłata za bilet",
+    "Port zaokrętowania (C = Cherbourg, Q = Queenstown, S = Southampton)"
+  ),
+  check.names = FALSE
+)
+
+kable(tabela_zmienne_titanic2, caption = "Zmiennie po zmianach zbioru danych \\label{tab:tabela_titanic2}", 
+      row.names = FALSE, format = "latex", booktabs = TRUE) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover"),
+    latex_options = c("hold_position", "scale_down"),
+    font_size = 12
+  ) %>%
+  column_spec(4, width = "10cm")
+
+# Liczba przypadków (wierszy) i cech (kolumn) po zmianach
+dim(dane3)
+@
+
+\subsection{Redukcja wymiaru na bazie MDS}
+<<diagram_sheparda, echo=FALSE, warning=FALSE, fig.cap="\\label{fig:wykres19}Diagram Sheparda", fig.width=6, fig.height=5>>=
+# Przygotowanie danych
+dane3 <- data.frame(lapply(dane3, function(x) {
+  if(is.character(x)) as.factor(x) else x
+}))
+dane4 <- dane3[, !(names(dane3) %in% "Survived")]
+
+# Macierz odmienności Gowera
+dist_matrix <- daisy(dane4, metric = "gower")
+
+# Wykonanie MDS
+set.seed(123)
+mds_result <- isoMDS(dist_matrix, k = 2)
+
+# Ustawienia graficzne - standardowe marginesy
+par(mrow = c(2,1))
+
+# 1. Wykres MDS z podziałem na Pclass
+plot(mds_result$points, 
+     col = c("thistle", "skyblue", "lightpink")[as.numeric(dane4$Pclass)],
+     pch = 16,
+     xlab = "Wymiar MDS1", ylab = "Wymiar MDS2",
+     main = "MDS Titanic - podział na klasę pasażerską")
+legend("topright", 
+       legend = c("1 klasa", "2 klasa", "3 klasa"),
+       col = c("thistle", "skyblue", "lightpink"), 
+       pch = 16, 
+       title = "Klasa",
+       bg = "white", box.col = "gray") # Nieprzezroczyste tło
+
+# 2. Wykres MDS z podziałem na płeć
+plot(mds_result$points, 
+     col = ifelse(dane4$Sex == "female", "thistle", "skyblue"),
+     pch = 16,
+     xlab = "Wymiar MDS1", ylab = "Wymiar MDS2",
+     main = "MDS Titanic - podział na płeć")
+legend("topright", 
+       legend = c("Kobieta", "Mężczyzna"),
+       col = c("thistle", "skyblue"), 
+       pch = 16, 
+       title = "Płeć",
+       bg = "white", box.col = "gray")
+
+# 3. Wykres MDS z podziałem na wiek
+age_groups <- cut(dane3$Age, breaks = c(0, 18, 30, 50, 100), 
+                 labels = c("Dzieci", "Młodzi", "Średni wiek", "Starszy"))
+plot(mds_result$points, 
+     col = c("thistle", "skyblue", "lightpink", "lavender")[as.numeric(age_groups)],
+     pch = 16,
+     xlab = "Wymiar MDS1", ylab = "Wymiar MDS2",
+     main = "MDS Titanic - podział na grupy wiekowe")
+legend("topright", 
+       legend = levels(age_groups),
+       col = c("thistle", "skyblue", "lightpink", "lavender"), 
+       pch = 16, 
+       title = "Wiek",
+       bg = "white", box.col = "gray")
+
+# 4. Wykres MDS z podziałem na wielkość rodziny
+family_size <- dane3$SibSp + dane3$Parch
+family_groups <- cut(family_size, breaks = c(-1, 0, 1, 3, 20),
+                    labels = c("Samotni", "Mała", "Średnia", "Duża"))
+plot(mds_result$points, 
+     col = c("thistle", "skyblue", "lightpink", "lavender")[as.numeric(family_groups)],
+     pch = 16,
+     xlab = "Wymiar MDS1", ylab = "Wymiar MDS2",
+     main = "MDS Titanic - podział na wielkość rodziny")
+legend("topright", 
+       legend = levels(family_groups),
+       col = c("thistle", "skyblue", "lightpink", "lavender"), 
+       pch = 16, 
+       title = "Rodzina",
+       bg = "white", box.col = "gray")
+
+# 5. Wykres MDS z podziałem na cenę biletu
+fare_groups <- cut(dane3$Fare, 
+                  breaks = quantile(dane3$Fare, probs = seq(0, 1, 0.25), na.rm = TRUE),
+                  labels = c("Tani", "Średni", "Drogi", "VIP"))
+plot(mds_result$points, 
+     col = c("thistle", "skyblue", "lightpink", "lavender")[as.numeric(fare_groups)],
+     pch = 16,
+     xlab = "Wymiar MDS1", ylab = "Wymiar MDS2",
+     main = "MDS Titanic - podział na cenę biletu")
+legend("topright", 
+       legend = levels(fare_groups),
+       col = c("thistle", "skyblue", "lightpink", "lavender"), 
+       pch = 16, 
+       title = "Bilet",
+       bg = "white", box.col = "gray")
+
+# Diagram Sheparda
+shepard <- Shepard(dist_matrix, mds_result$points)
+plot(shepard, pch = 19, col = "thistle",
+     xlab = "Oryginalne odległości", ylab = "Odległości w MDS",
+     main = "Diagram Sheparda")
+lines(shepard$x, shepard$yf, col = "skyblue", lwd = 2)
+
+# Obliczenie stresu
+cat("Wartość stresu:", round(mds_result$stress, 2), "%\n")
+@
+
+\subsection{Wizualizacja danych}
+<<mds_class_sex, echo=FALSE>>=
+mds_df <- data.frame(
+  MDS1 = mds_result$points[,1],
+  MDS2 = mds_result$points[,2],
+  Survived = factor(dane3$Survived, labels = c("Zmarli", "Ocaleli")),
+  Pclass = factor(dane3$Pclass),
+  Sex = factor(dane3$Sex)
+)
+
+# 2. Wykres z podziałem na Survived
+ggplot(mds_df, aes(x = MDS1, y = MDS2, color = Survived)) +
+  geom_point(alpha = 0.7, size = 2) +
+  scale_color_manual(values = c("Zmarli" = "tomato", "Ocaleli" = "steelblue")) +
+  labs(title = "Podział pasażerów względem przeżycia",
+       x = "Wymiar MDS1", y = "Wymiar MDS2") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# 3. Wykres z podziałem na Pclass i Sex
+ggplot(mds_df, aes(x = MDS1, y = MDS2)) +
+  geom_point(aes(color = Pclass, shape = Sex), size = 3, alpha = 0.6) +
+  scale_color_manual(values = c("1" = "thistle", "2" = "skyblue", "3" = "lightpink"),
+                     name = "Klasa") +
+  scale_shape_discrete(name = "Płeć") +
+  labs(title = "Podział na klasę i płeć") +
+  theme_minimal() +
+  theme(legend.box = "horizontal",
+        legend.position = "bottom")
+@
+\end{document}

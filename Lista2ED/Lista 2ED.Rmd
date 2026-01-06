@@ -1,0 +1,404 @@
+---
+title: "Raport lista 2"
+author: "Dominik Kowalczyk i Matylda Mordal"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document:
+    toc: true
+    fig_caption: true
+    fig_width: 5
+    fig_height: 4
+    number_sections: true
+  html_document:
+    toc: true
+    df_print: paged
+header-includes:
+- \usepackage[OT4]{polski}
+- \usepackage[utf8]{inputenc}
+- \usepackage{graphicx}
+- \usepackage{float}
+subtitle: Eksploracja danych
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, results = 'asis')
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(RColorBrewer)
+library(e1071)
+library(gridExtra) 
+library(tidyr)
+```
+
+# Zadanie 2 - Analiza składowych głównych (Principal Component Analysis (PCA))
+
+Dane pochodzą z pliku CSV i zawierają informacje o jakości życia w różnych miastach świata, które posłużą do analizy danych (z pliku "uaScoresDataFrame.csv" dostępnego pod linkiem: https://www.kaggle.com/datasets/orhankaramancode/city-quality-of-life-dataset.
+
+
+```{r wczytywanie-danych}
+#Wczytanie zbioru danych
+danePCA <- read.csv(file="uaScoresDataFrame.csv", stringsAsFactors = TRUE)
+```
+
+Zweryfikujmy i spawdźmy z jakimi danymi mamy doczynenia
+
+```{r analiza-klas, echo=FALSE}
+# Typy zmiennych dla danePCA
+
+# Tworzymy ramkę danych z indeksami, nazwami zmiennych i typami
+tz_pca <- data.frame(
+  Indeks = seq_along(names(danePCA)),
+  "Nazwa zmiennej" = names(danePCA),
+  "Typ zmiennej" = sapply(danePCA, class),
+  "Opis zmiennej" = c(
+    "Indeks porządkowy",
+    "Nazwa obszaru miejskiego",
+    "Kraj obszaru miejskiego",
+    "Kontynent obszaru miejskiego",
+    "Wskaźnik  standardu zamieszkania",
+    "Wskaźnik kosztów życia",
+    "Wskaźnik liczby startupów",
+    "Wskaźnik kapitału wysokiego ryzyka",
+    "Wskaźnik łączności podróżniczej",
+    "Wskaźnik dojazdów do pracy",
+    "Wskaźnik swobody działalności gospodarczej",
+    "Wskaźnik bezpieczeństwa",
+    "Wskaźnik opieki zdrowotnej",
+    "Wskaźnik edukacji",
+    "Wskaźnik jakości środowiska",
+    "Wskaźnik ekonomii",
+    "Wskaźnik opodatkowania",
+    "Wskaźnik dostępu do internetu",
+    "Wskaźnik rekreacji i kultury",
+    "Wskaźnik tolerancji",
+    "Wskaźnik aktywności na świeżym powietrzu"
+  ),
+  check.names = FALSE
+)
+
+
+#Tworzymy dużą tabele
+
+#Problem z prawiudłowym umiejscowieniem tabeli, dlatego skorzystamy z drugiej opcji 
+#tz_pca %>%
+#  kable(format = "latex", caption = "Opis danych PCA \\label{tab:tabela opis danych}", booktabs = TRUE, row.names = FALSE) %>%
+#  kable_styling(latex_options = c("striped", "hold_position", "scale_down"))
+
+kable(tz_pca, caption = "Opis danych PCA \\label{tab:OpisDanych}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+
+
+
+Chcąc zastosować metodę PCA, musimy wyodrębnić cechy ilościowe
+
+
+```{r dane-iloścowe}
+#Wyodębnienie zmiennych ilościowych
+daneIlosciowe <- danePCA %>%
+  select(where(is.numeric)) %>%
+  select(-X)  
+#usuwa kolumnę X, która reprezentowała indeksy, które są zbędne w analizie 
+```
+
+Dodatkowo, aby móc efektownie zastosować metodę PCA musimy stwierdzić czy potrzebna jest standaryzacja naszych danych ilościowych. W tym celu wyliczymy ich wariację oraz porównamy je wizualnie.
+
+```{r wariancje, fig.width=8, fig.height=5, echo=FALSE}
+#Wyliczenie wariancji cech ilościowych
+wariancje <- sapply(daneIlosciowe, var)
+
+#Zamieniamy na ramkę danych
+wariancje_df <- data.frame(
+  Cecha = names(wariancje),
+  Wariancja = round(wariancje, 3)
+)
+
+#Wyświetlamy ładną tabelkę
+kable(wariancje_df, caption = "Wariancje cech ilościowych \\label{tab:tabela2}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+#Wykresy pudełkowe wariancji cech ilościowych
+boxplot(daneIlosciowe, main = "Wizualizacja cech ilościowych", las = 2,cex.axis = 0.5, col="lightpink")
+#las - obraca etykiety osi X, aby były czytelne
+```
+
+Jak widać na (WYKESIE!) rozrzut (wariancja) między cechami ilościowymi jest bardzo chaotyczny, zróżnicowany - niektóre cechy mają duży zakres, a inne są mocno skupione wokół środka. Stąd, można stwierdzić, że należy przeprowadzić standaryzację danych. 
+
+```{r standaryzacja-danych, fig.width=8, fig.height=5, echo=FALSE}
+#Standaryzacja danych cech ilościowych
+daneStandaryzowane <- scale(daneIlosciowe)
+
+#Wykresy pudełkowe cech ilościowych po standaryzacji 
+boxplot(daneStandaryzowane, main = "Wizualizacja cech ilościowych po standaryzacji", las = 2, cex.axis = 0.5, col="lightpink")
+```
+Mając już ustandaryzowane dane, możemy przejść do wyliczania i porównania składowych głównych.
+
+```{r składowe-główne, echo=FALSE}
+#Wyzanczanie składowych głównych
+pca <- prcomp(daneStandaryzowane,
+              center = FALSE,   #już są wycentrowane przez scale()
+              scale. = FALSE)   #już są zeskalowane przez scale()
+
+#Boxplot rozrzutu PC1–PC3
+#scores to macierz wartości nowych zmiennych (składowych)
+scores <- pca$x
+
+par(mar = c(5,4,4,2))   #standardowe marginesy
+boxplot(scores[,1:3],
+        names = c("PC1","PC2","PC3"),
+        main  = "Rozrzut pierwszych 3 składników głównych",
+        ylab  = "Wartość składowej",
+        col   = c("lightblue","lightgreen","lightpink"))
+
+#Wyciągnięcie loadings (obciążenia zmiennych na PC1–PC3)
+loadings <- pca$rotation[,1:3]
+loadings_df <- data.frame(
+  Zmienna = rownames(loadings),
+  PC1 = round(loadings[,1], 3),
+  PC2 = round(loadings[,2], 3),
+  PC3 = round(loadings[,3], 3)
+```
+
+
+```{r składowe-główne, echo=FALSE}
+)
+```
+
+```{r opcjonalna-tabelke, echo=FALSE, results="hide"}
+#Wyświetlamy ładną tabelkę
+kable(loadings_df, caption = "Obciążenia zmiennych na PC1, PC2, PC3 \\label{tab:tabela3}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+
+```{r wykresy-obciazen, echo=FALSE}
+
+#Trzy ,największe zmienne do kazdego obciążenia
+top_k <- 3   #ile na komponentę
+top_list <- lapply(1:3, function(i) {
+  df <- loadings_df[order(-abs(loadings_df[[i+1]])), c("Zmienna", names(loadings_df)[i+1])]
+  colnames(df) <- c("Zmienna", "Loading")
+  df[1:top_k, ]
+})
+
+for(i in 1:3) {
+  tab <- top_list[[i]]
+  rownames(tab) <- NULL
+  caption_txt <- paste0("Największe obciążenia zmiennych na PC", i,
+    " \\label{tab:tabela", i+1, "}")
+  
+  kable(tab,
+        caption   = caption_txt,
+        col.names = c("Zmienna", "Loading")
+  ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "bordered", "hover"),
+      font_size     = 10
+    ) %>%
+    print()
+}
+```
+
+**PC1: Ogólny Poziom Rozwoju Społeczno-Gospodarczego**
+
+Ta główna składowa łączy ze sobą edukację, wolność gospodarczą i jakość środowiska. Ujemne obciążenia wskazują, że jednostki z wyższymi wartościami PC1 charakteryzują się niższymi wynikami w tych trzech obszarach. Możemy interpretować to tak, że PC1 odzwierciedla pewien "potencjał" lub "bazowy poziom" rozwoju. Wyższy wynik na tej składowej może wskazywać na społeczeństwa, które mają solidne fundamenty w edukacji, otwartą gospodarkę i dbałość o środowisko, co długoterminowo sprzyja dobrobytowi. Warto zauważyć, że te trzy zmienne wzajemnie się wzmacniają: wykształcone społeczeństwo może dążyć do lepszej jakości środowiska i tworzyć bardziej innowacyjną i wolną gospodarkę.
+
+**PC2: Innowacyjność i kultura**
+
+Ta składowa grupuje startupy, kapitał wysokiego ryzyka oraz aktywności związane z czasem wolnym i kulturą. Ujemne obciążenia sugerują, że wyższe wartości tej składowej są powiązane z mniejszą liczbą startupów, ograniczonym dostępem do finansowania innowacji (kapitał wysokiego ryzyka) oraz uboższą ofertą kulturalną. Zatem, PC2 wydaje się mierzyć "dynamikę" i "nowoczesność" ekosystemu. Regiony z wyższymi wynikami na tej składowej prawdopodobnie posiadają silne środowisko wspierające nowe przedsięwzięcia, dostęp do inwestycji i bogate życie kulturalne, co przyciąga talent i sprzyja innowacjom.
+
+**PC3: Infrastruktura, logistyka, bezpieczeństwo**
+
+Ta składowa łączy czas dojazdu, łączność komunikacyjną i poczucie bezpieczeństwa. Ponownie, ujemne obciążenia oznaczają, że wyższe wartości PC3 korelują z dłuższymi czasami dojazdu, słabszą infrastrukturą komunikacyjną i niższym poziomem bezpieczeństwa. PC3 można więc interpretować jako miarę "sprawności" i "jakości życia codziennego". Wysokie wyniki na tej składowej wskazują na obszary, gdzie infrastruktura transportowa jest dobrze rozwinięta, komunikacja jest efektywna, a mieszkańcy czują się bezpiecznie, co znacząco wpływa na komfort życia i potencjał gospodarczy.
+
+```{r zmiennosc-poszczegolnych-skladowych, echo=FALSE}
+#Sprawdzenie wariancji w składowych
+wariancja <- pca$sdev^2
+udzial <- wariancja / sum(wariancja)     #udział każdej składowej
+skumulowany_udzial <- cumsum(udzial)     #skumulowany udział
+
+
+ile_dla_80 <- which(skumulowany_udzial >= 0.80)[1]
+ile_dla_90 <- which(skumulowany_udzial >= 0.90)[1]
+
+#Dane do tabeli
+procenty <- data.frame(
+  "Poziom wyjaśnionej wariancji" = c("80%", "90%"),
+  "Liczba potrzebnych składowych" = c(ile_dla_80, ile_dla_90)
+)
+
+#Tabela mała
+kable(procenty, caption = "Liczba składowych potrzebnych do wyjaśnienia 80% i 90% zmienności \\label{tab:potrzebneSkladowe}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+```
+Jak widać w tabeli
+```{r tabelki-dla-skumulowanegoudzialu, echo=FALSE}
+# Przygotowanie tabeli
+tabela_udzial <- data.frame(
+  Składowa = paste0("PC", 1:length(udzial)),
+  `Udział (proc)` = round(udzial * 100, 2),
+  `Skumulowany udział (proc)` = round(skumulowany_udzial * 100, 2)
+)
+
+kable(tabela_udzial, caption = "Udział wariancji wyjaśnionej przez składniki główne") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+```
+
+```{r wykresy123}
+# Obliczenie wariancji dla scree plot
+variances <- pca$sdev^2
+proportion_var <- variances / sum(variances)
+
+# Ustawienie układu 1x3
+par(mfrow = c(1, 3))  # 1 wiersz, 3 kolumny
+
+# Boxplot dla wszystkich składowych
+boxplot(scores,
+        main = "Rozrzut wszystkich składników",
+        ylab = "Wartość składowej",
+        col  = rainbow(ncol(scores)),
+        names = paste0("PC", 1:ncol(scores)))
+
+# Boxplot tylko dla PC1–PC3
+boxplot(scores[,1:3],
+        names = c("PC1","PC2","PC3"),
+        main  = "Rozrzut PC1–PC3",
+        ylab  = "Wartość składowej",
+        col   = c("lightblue","lightgreen","lightpink"))
+
+# Scree plot – wykres wariancji
+plot(proportion_var, type = "b",
+     main = "Scree Plot",
+     xlab = "Składowa główna",
+     ylab = "Proporcja wariancji",
+     pch = 19, col = "darkblue",
+     xaxt = "n")
+axis(1, at = 1:length(proportion_var), labels = paste0("PC", 1:length(proportion_var)))
+
+# Przywrócenie układu 1x1
+par(mfrow = c(1,1))
+
+```
+
+
+```{r m, echo=FALSE}
+wariancja <- pca$sdev^2
+proporcja_war <- wariancja / sum(wariancja)
+skumulowany_udzial <- cumsum(proporcja_war)     #skumulowany udział
+
+# Przygotowanie tabeli
+tabela_udzial <- data.frame(
+  Skladowa = paste0("PC", 1:length(proporcja_war)),
+  Udzial = round(proporcja_war * 100, 2),
+  Skumulowany = round(skumulowany_udzial * 100, 2))
+
+kable(tabela_udzial, caption = "Udział wariancji wyjaśnionej przez składniki główne") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+```
+
+
+```{r zmiennosc-poszczegolnych-skladowych, echo=FALSE}
+#Analiza (wykres i tabela) dla 90 i 80 procent udziału składowych)
+plot(proporcja_war, type = "b",
+     main = "Scree Plot",
+     xlab = "Składowa główna",
+     ylab = "Proporcja wariancji",
+     pch = 19, col = "darkblue",
+     xaxt = "n")
+axis(1, at = 1:length(proporcja_war), labels = paste0("PC", 1:length(proporcja_war)))
+
+ile_dla_80 <- which(skumulowany_udzial >= 0.80)[1]
+ile_dla_90 <- which(skumulowany_udzial >= 0.90)[1]
+
+#Dane do tabeli
+procenty <- data.frame(
+  "Poziom wyjaśnionej wariancji" = c("80%", "90%"),
+  "Liczba potrzebnych składowych" = c(ile_dla_80, ile_dla_90)
+)
+
+#Tabela mała
+kable(procenty, caption = "Liczba składowych potrzebnych do wyjaśnienia 80% i 90% zmienności \\label{tab:potrzebneSkladowe}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+
+
+```{r analiza-skladowych-skrocone, fig.width=10, fig.height=6, echo=FALSE, fig.cap="\\label{fig:rozrzutmiast}Rozrzut miast względem skladowych"}
+#Analiza składowych na wykresach
+# Dołącz kolumnę z nazwami miast i kontynentów do wyników PCA
+pca_df1 <- as.data.frame(pca$x) %>%
+  mutate(
+    Miasto = danePCA$UA_Name,
+    Kontynent = danePCA$UA_Continent,
+    SkroconaNazwa = substr(Miasto, 1, 2) # Dodaj skróconą nazwę
+  )
+
+# Wykres 2D - PC1 vs PC2 z skróconymi nazwami
+ggplot(pca_df1, aes(x = PC1, y = PC2, color = Kontynent, label = SkroconaNazwa)) +
+  geom_point(size = 3) +
+  geom_text(aes(label = SkroconaNazwa), vjust = -1, hjust = 0.5, size = 2) + # Zmniejszono rozmiar czcionki
+  theme_minimal() +
+  labs(title = "Wykres rozrzutu miast względem PC1 i PC2",
+       x = "Pierwsza składowa główna (PC1)",
+       y = "Druga składowa główna (PC2)",
+       color = "Kontynent")
+```
+
+```{r 3dwykres, echo=FALSE, fig.width=7, fig.height=7}
+# 1) Załaduj pakiet (upewnij się, że jest zainstalowany):
+library(scatterplot3d)
+
+# 2) Przygotuj wektor kolorów i faktora kontynentów:
+kontynent_colors <- factor(pca_df1$Kontynent)
+colors <- rainbow(nlevels(kontynent_colors))[kontynent_colors]
+
+# 3) Narysuj wykres 3D:
+s3d <- scatterplot3d(
+  x = pca_df1$PC1, 
+  y = pca_df1$PC2, 
+  z = pca_df1$PC3,
+  color = colors,
+  pch = 19,
+  main = "Wykres rozrzutu 3D miast względem PC1, PC2 i PC3",
+  xlab = "PC1",
+  ylab = "PC2",
+  zlab = "PC3"
+)
+
+# 4) Doklej legendę w tym samym układzie współrzędnych:
+legend(
+  "bottomright",
+  legend = levels(kontynent_colors),
+  col    = rainbow(nlevels(kontynent_colors)),
+  pch    = 19,
+  inset  = 0.02,
+  bty    = "n"
+)
+```
+
+
+
+```{r}rawyresynatejsamejlini, echo=FALSE, fig.width=6, fig.height=4, results="hide", fig.cap="\\label{fig:biplot23}PC1 vs PC2"}
+# Wykres 1: Tylko strzałki (zmienne)
+p2 <- fviz_pca_var(pca,
+                    col.var = "black", # kolor strzałek
+                    labelsize = 4) +   # rozmiar etykiet zmiennych
+  ggtitle("Tylko zmienne (strzałki)")
+
+# Wykres 2: Tylko punkty i elipsy (bez strzałek)
+p3 <- fviz_pca_ind(pca,
+                    habillage = danePCA$UA_Continent, # kolor wg kontynentu
+                    addEllipses = TRUE,               # dodaj elipsy
+                    pointsize = 2,                     # rozmiar punktów
+                    label = "none") +                 # brak etykiet dla punktów
+  ggtitle("Tylko punkty i elipsy")
+
+print(p2)
+print(p3)
+```
+

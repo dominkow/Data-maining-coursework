@@ -1,0 +1,421 @@
+---
+title: "Raport Lista 2"
+author: "Dominik Kowalczyk i Matylda Mordal"
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+    toc: true
+    fig_caption: true
+    fig_width: 5
+    fig_height: 4
+    number_sections: true
+  html_document:
+    toc: true
+    df_print: paged
+header-includes:
+- \usepackage[OT4]{polski}
+- \usepackage[utf8]{inputenc}
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{amsmath}
+subtitle: Eksploracja danych
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, results = 'asis')
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(RColorBrewer)
+library(e1071)
+library(gridExtra) 
+library(tidyr)
+library(summarytools)
+library(purrr)
+library(arules)
+library(cluster)
+library(mclust)
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+library(factoextra)
+```                                                                                       
+
+
+# Analiza składowych głównych (Principal Component Analysis (PCA))
+
+## Przygotowanie danych i ich opis
+
+Dane pochodzą z pliku CSV i zawierają informacje o jakości życia w różnych miastach świata, które posłużą do analizy danych (z pliku "uaScoresDataFrame.csv") dostępnego pod linkiem: https://www.kaggle.com/datasets/orhankaramancode/city-quality-of-life-dataset.
+
+
+```{r wczytywanie-danych1}
+#Wczytanie zbioru danych
+danePCA <- read.csv(file="uaScoresDataFrame.csv", stringsAsFactors = TRUE)
+```
+
+
+Zweryfikujmy i spawdźmy z jakimi danymi mamy doczynenia
+
+```{r analiza-klas, echo=FALSE}
+# Typy zmiennych dla danePCA
+
+# Tworzymy ramkę danych z indeksami, nazwami zmiennych i typami
+tz_pca <- data.frame(
+  Indeks = seq_along(names(danePCA)),
+  "Nazwa zmiennej" = names(danePCA),
+  "Typ zmiennej" = sapply(danePCA, class),
+  "Opis zmiennej" = c(
+    "Indeks porządkowy",
+    "Nazwa obszaru miejskiego",
+    "Kraj obszaru miejskiego",
+    "Kontynent obszaru miejskiego",
+    "Wskaźnik  standardu zamieszkania",
+    "Wskaźnik kosztów życia",
+    "Wskaźnik liczby startupów",
+    "Wskaźnik kapitału wysokiego ryzyka",
+    "Wskaźnik łączności podróżniczej",
+    "Wskaźnik dojazdów do pracy",
+    "Wskaźnik swobody działalności gospodarczej",
+    "Wskaźnik bezpieczeństwa",
+    "Wskaźnik opieki zdrowotnej",
+    "Wskaźnik edukacji",
+    "Wskaźnik jakości środowiska",
+    "Wskaźnik ekonomii",
+    "Wskaźnik opodatkowania",
+    "Wskaźnik dostępu do internetu",
+    "Wskaźnik rekreacji i kultury",
+    "Wskaźnik tolerancji",
+    "Wskaźnik aktywności na świeżym powietrzu"
+  ),
+  check.names = FALSE
+)
+
+#Tworzymy dużą tabele
+kable(tz_pca, caption = "Opis danych PCA \\label{tab:OpisDanych}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+
+W zbiorze danych nie występują brakujące wartości (NA),
+Struktura i podstawowe statystyki zmiennych zostały sprawdzone za pomocą str()
+i summary(). Żadne nieprawidłowości w typach danych ani w rozkładzie
+zmiennych nie zostały zidentyfikowane.
+Kolumna `X` zawiera wyłącznie numerację wierszy i nie wnosi istotnych informacji, zatem nie należy brać jej pod uwagę podczas naszej analizy.
+
+
+Metodę PCA można zastosować tylko na zmiennych rodzaju ilościowego, zatem wyodrębmy je (pamiętając o usunięciu kolumny `X`):
+
+```{r dane-iloścowe}
+#Wyodębnienie zmiennych ilościowych
+daneIlosciowe <- danePCA %>%
+  select(where(is.numeric)) %>%
+  select(-X)  
+```
+
+Dodatkowo, aby móc efektownie zastosować metodę PCA musimy stwierdzić czy potrzebna jest standaryzacja naszych danych ilościowych. W tym celu wyliczymy ich wariację oraz porównamy je wizualnie.
+
+```{r wariancje, fig.width=8, fig.height=5, echo=FALSE, fig.cap="\\label{fig:rozrzutprzed}Wizualizacja cech ilościowych"}
+#Wyliczenie wariancji cech ilościowych
+wariancje <- sapply(daneIlosciowe, var)
+
+#Zamieniamy na ramkę danych
+wariancje_df <- data.frame(
+  Cecha = names(wariancje),
+  Wariancja = round(wariancje, 3)
+)
+
+#Wyświetlamy ładną tabelkę
+kable(wariancje_df, caption = "Wariancje cech ilościowych \\label{tab:tabelawariancjiilosciowych}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+#Wykresy pudełkowe wariancji cech ilościowych
+boxplot(daneIlosciowe, main = "Wizualizacja cech ilościowych", las = 2,cex.axis = 0.5, col="lightpink")
+#las - obraca etykiety osi X, aby były czytelne
+```
+Jak widać na Rysunku \ref{fig:rozrzutprzed} oraz Tabeli \ref{tab:tabelawariancjiilosciowych} rozrzut (wariancja) między cechami ilościowymi jest chaotyczny, znacząco zróżnicowany - niektóre cechy mają duży zakres, a inne są mocno skupione wokół środka. Stąd, można stwierdzić, że należy przeprowadzić standaryzację danych. 
+
+```{r standaryzacja-danych, fig.width=8, fig.height=5, echo=FALSE, fig.cap="\\label{fig:rozrzutpo}Wizualizacja cech ilościowych po standaryzacji"}
+#Standaryzacja danych cech ilościowych
+daneStandaryzowane <- scale(daneIlosciowe)
+
+#Wykresy pudełkowe cech ilościowych po standaryzacji 
+boxplot(daneStandaryzowane, main = "Wizualizacja cech ilościowych po standaryzacji", las = 2, cex.axis = 0.5, col="lightpink")
+```
+
+Mając ustandaryzowane dane (jak na Rysunku \ref{fig:rozrzutpo}) możemy przejść do wyzanczania, wyliczania oraz porównywania składowych głównych.
+
+```{r wykresy-składowych, echo=FALSE, fig.width=8, fig.height=5, fig.cap="\\label{fig:rozrzutskladowych}Rozrzut składowych głównych"}
+#Wyniki PCA (scores)
+pca <- prcomp(daneStandaryzowane,
+              center = FALSE,   #już są wycentrowane przez scale()
+              scale. = FALSE)   #już są zeskalowane przez scale()
+
+scores <- pca$x
+
+#Ustawienie układu 1x2
+par(mfrow = c(1, 2))
+
+#Boxplot wszystkich składników
+boxplot(scores,
+        main = "Rozrzut wszystkich składowych",
+        xlab = "Składowa główna",
+        ylab = "Wartość składowej",
+        col  = rainbow(ncol(scores)),
+        names = paste0("PC", 1:ncol(scores)))
+
+#Boxplot dla składników głównych 1-3
+boxplot(scores[,1:3],
+        names = c("PC1","PC2","PC3"),
+        main  = "Rozrzut PC1–PC3",
+        xlab = "Składowa główna",
+        ylab  = "Wartość składowej",
+        col   = c("lightblue","lightgreen","lightpink"))
+
+
+#Przywrócenie układu 1x1
+par(mfrow = c(1,1))
+
+```
+Składowe główne są uporządkowane względem wariancji - PC1 ma charakteryzuje się największym rozrzutem, a PC17 najmniejszym, co jest wyraźnie ukazane na Rysunkach
+\ref{fig:rozrzutskladowych}.
+
+Przyjrzyjmy się głębiej interesującymi nas składowymi głównymi: PC1, PC2, PC3:
+
+```{r analiza-skladowych13, echo=FALSE}
+loadings <- pca$rotation[,1:3]
+loadings_df <- data.frame(
+  Zmienna = rownames(loadings),
+  PC1 = round(loadings[,1], 3),
+  PC2 = round(loadings[,2], 3),
+  PC3 = round(loadings[,3], 3))
+
+#Sześć największych zmiennych do każdego obciążenia
+top_k <- 6   #ile na komponentę
+top_list <- lapply(1:3, function(i) {
+  df <- loadings_df[order(-abs(loadings_df[[i+1]])), c("Zmienna", names(loadings_df)[i+1])]
+  colnames(df) <- c("Zmienna", "Loading")
+  df[1:top_k, ]
+})
+
+for(i in 1:3) {
+  tab <- top_list[[i]]
+  rownames(tab) <- NULL
+  caption_txt <- paste0("Największe obciążenia zmiennych na PC", i,
+    " \\label{tab:tabela", i+1, "}")
+  
+  kable(tab,
+        caption   = caption_txt,
+        col.names = c("Zmienna", "Loading")
+  ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "bordered", "hover"),
+      font_size     = 10
+    ) %>%
+    print()
+}
+```
+
+**PC1**
+
+Pierwsza składowa główna - PC1 (Tabela \ref{tab:tabela2}) wydaje się kontrastować miasta o dobrej sytuacji mieszkaniowej z tymi, które charakteryzują się wyższym poziomem rozwoju społeczno-ekonomicznego w innych obszarach. Wysokie wartości na PC1 wskazują na miasta, gdzie dostępność i warunki mieszkaniowe są relatywnie lepsze, ale może to iść w parze z niższymi wskaźnikami w edukacji, swobodzie gospodarczej, jakości środowiska, opiece zdrowotnej i dostępie do internetu. Z kolei niskie wartości PC1 sugerują miasta z gorszą sytuacją mieszkaniową, ale potencjalnie silniejszymi wynikami w wymienionych aspektach rozwoju. 
+
+**PC2**
+
+Druga składowa główna - PC2 (Tabela \ref{tab:tabela3} ogólnie odróżnia miasta o wyższym poziomie kapitału społecznego i jakości życia od tych z silniejszym ekosystemem innowacji i kultury. Wysokie wartości PC2 wskazują na miasta z większą tolerancją, bezpieczeństwem i lepszą jakością środowiska, ale potencjalnie z mniejszą aktywnością startupową i uboższą ofertą czasu wolnego o charakterze komercyjnym. Natomiast niskie wartości PC2 sugerują miasta z dynamicznym środowiskiem startupów, bogatą ofertą kulturalną i rozrywkową, ale mogą borykać się z niższym poziomem tolerancji, bezpieczeństwa i gorszą jakością środowiska.
+
+
+**PC3**
+Trzecia składowa główna - PC3 (Tabela\ref{tab:tabela4} zdaje się przeciwstawiać miasta z silną kondycją ekonomiczną tym, które oferują lepszą jakość życia pod względem codziennych doświadczeń i kosztów. Wysokie wartości na PC3 wskazują na miasta z dynamiczną gospodarką, ale mogą wiązać się z dłuższymi dojazdami, gorszą komunikacją zewnętrzną, niższym poziomem bezpieczeństwa, wyższymi kosztami życia i trudniejszą sytuacją mieszkaniową. Z kolei niskie wartości PC3 sugerują miasta o potencjalnie słabszej gospodarce, lecz z krótszymi dojazdami, lepszą łącznością, wyższym bezpieczeństwem, niższymi kosztami utrzymania i lepszym rynkiem mieszkaniowym.
+
+
+## Zmienność odpowiadająca poszczególnym składowym
+
+Zbadajmy teraz, jaki procent wyjaśnionej wariancji (zmienności) odpowiada poszczególnym składowym.
+
+
+```{r m, echo=FALSE}
+wariancja <- pca$sdev^2
+proporcja_war <- wariancja / sum(wariancja)
+skumulowany_udzial <- cumsum(proporcja_war)     #skumulowany udział
+
+#Przygotowanie tabeli
+tabela_udzial <- data.frame(
+  Skladowa = paste0("PC", 1:length(proporcja_war)),
+  Udzial = round(proporcja_war * 100, 2),
+  Skumulowany = round(skumulowany_udzial * 100, 2))
+
+kable(tabela_udzial, caption = "Udział wariancji wyjaśnionej przez składniki główne \\label{tab:wariancjeskladnikowe}")
+```
+
+```{r ladnyscreeplot, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:screeplotyskladowych}Udział jednostkowy i skumulowany wariancji dla składowych głównych (%)"}
+#Ustawienie układu graficznego: dwa wykresy obok siebie
+par(mfrow = c(1, 2), mar = c(5, 4, 4, 2) + 0.1)
+
+#Scree Plot z lepiej widocznymi etykietami
+bp <- barplot(proporcja_war * 100,  #Procenty
+              main = "Udział wariancji",
+              xlab = "Składowa główna",
+              ylab = "Proporcja wariancji (%)",
+              names.arg = paste0("PC", 1:length(proporcja_war)),  #Etykiety 
+              col = "darkblue",
+              ylim = c(0, max(proporcja_war * 100) * 1.3))
+
+#Dodanie wartości procentowych nad kolumnami
+text(x = bp,  #Pozycja X (środek kolumn)
+     y = proporcja_war * 100 + 1.5,  #Pozycja Y (nieco nad kolumnami)
+     labels = paste0(round(proporcja_war * 100, 1), "%"),  #Zaokrąglone wartości procentowe
+     pos = 3,  
+     col = "black", 
+     cex = 0.5)  
+
+#Wykres skumulowanego udziału w formie kolumn
+bp_cum <- barplot(skumulowany_udzial * 100,  # Procenty
+                  main = "Skumulowany udział wariancji",
+                  xlab = "Składowa główna",
+                  ylab = "Skumulowany udział (%)",
+                  names.arg = paste0("PC", 1:length(skumulowany_udzial)), 
+                  col = "lightblue",  
+                  ylim = c(0, 110))  
+
+#Dodanie linii dla 80% i 90%
+abline(h = 80, col = "red", lty = "dashed", lwd = 2)
+abline(h = 90, col = "green", lty = "dashed", lwd = 2)
+
+#Etykiety dla 80% i 90% na osi Y
+text(x = 0.5, y = 80 + 5, labels = "80%", col = "red", pos = 4, font = 2)
+text(x = 0.5, y = 90 + 5, labels = "90%", col = "green", pos = 4, font = 2)
+
+#Resetowanie układu graficznego
+par(mfrow = c(1, 1))
+```
+```{r zmiennosc-poszczegolnych-skladowych, echo=FALSE}
+#Tabela dla 90 i 80 procent udziału składowych)
+ile_dla_80 <- which(skumulowany_udzial >= 0.80)[1]
+ile_dla_90 <- which(skumulowany_udzial >= 0.90)[1]
+```
+
+Jak możemy wywnioskować z Rysunków \ref{fig:screeplotyskladowych} oraz Tabeli \ref{tab:wariancjeskladnikowe} większość zmienności danych można wyjaśnić za pomocą niewielkiej liczby składowych. Już wcześniej przebadane 3 pierwsze składowe stanowią ponad połowę (bo 57,21%) całkowitej wariancji.
+
+Liczba składowych potrzebna do wyjaśnienia 80% zmienności to `r ile_dla_80`. 
+Liczba składowych potrzebna do wyjaśnienia 90% zmienności to `r ile_dla_90`.
+
+```{r analiza-skladowych-skrocone, fig.width=10, fig.height=6, echo=FALSE, fig.cap="\\label{fig:rozrzutmiast}Rozrzut miast względem skladowych"}
+#Przygotowanie danych
+pca_df1 <- as.data.frame(pca$x) %>%
+  mutate(
+    Miasto = as.character(danePCA$UA_Name),  # Upewnij się, że to jest tekst
+    Kontynent = danePCA$UA_Continent,
+    SkroconaNazwa = substr(Miasto, 1, 2)
+  )
+
+#Oblicz odległość od środka (dla PCA PC1-PC2)
+pca_df1 <- pca_df1 %>%
+  mutate(distance = sqrt(PC1^2 + PC2^2))
+
+# 3. Wybierz top 10 najbardziej oddalonych miast
+top_n <- 20
+top_miasta <- pca_df1 %>%
+  arrange(desc(distance)) %>%
+  slice_head(n = top_n)
+
+#Dodaj kolumnę 'highlight' z pełną nazwą tylko dla wybranych
+pca_df1 <- pca_df1 %>%
+  mutate(highlight = ifelse(Miasto %in% top_miasta$Miasto, Miasto, NA))
+
+#Wykres
+ggplot(pca_df1, aes(x = PC1, y = PC2, color = Kontynent)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_text(aes(label = SkroconaNazwa), vjust = -1, hjust = 0.5, size = 2.5) +
+  geom_text_repel(
+    aes(label = highlight),
+    size = 4,
+    min.segment.length = 0,
+    seed = 42,
+    box.padding = 0.5,
+    na.rm = TRUE,
+    arrow = arrow(length = unit(0.010, "npc")),
+    nudge_x = 0.15,
+    nudge_y = 0.5,
+    color = "grey30"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Wykres rozrzutu miast względem PC1 i PC2",
+    x = "Pierwsza składowa główna (PC1)",
+    y = "Druga składowa główna (PC2)",
+    color = "Kontynent"
+  )
+
+```
+Rysunek \ref{fig:rozrzutmiast} przedstawia rozrzut miast w przestrzeni dwóch pierwszych (o największej zmienności) składowych głównych PC1 (oś X) i PC2 (oś Y), reprezentujących dwa główne kierunki zmienności w analizowanych danych.
+
+Miasta zaznaczone strzałkami to miasta najabardziej oddalone od pozostałej większości miast.
+
+Havana (Kuba): Położona w prawym górnym kwadrancie (wysokie PC1, wysokie PC2), sugeruje dobrą sytuację mieszkaniową, wysoki poziom tolerancji i bezpieczeństwa oraz dobrą jakość środowiska. Jednakże, może to iść w parze z niższym poziomem edukacji, mniejszą swobodą gospodarczą, słabszą opieką zdrowotną, gorszym dostępem do internetu, mniejszą aktywnością startupową i uboższą ofertą czasu wolnego. Sytuacja polityczno-gospodarcza Kuby może tłumaczyć ograniczenia w gospodarce i technologii, przy jednoczesnych silnych więziach społecznych i unikalnej kulturze. Jakość środowiska i bezpieczeństwo mogą być relatywnie wysokie.
+
+Caracas (Wenezuela): W prawym środkowym obszarze (wysokie PC1, lekko ujemne PC2), wskazuje na dobrą sytuację mieszkaniową (z zastrzeżeniami co do kryzysu), niższy poziom tolerancji, bezpieczeństwa i jakości środowiska, ale potencjalnie wyższą aktywność startupową i bogatszą ofertę czasu wolnego. Interpretacja wymaga ostrożności ze względu na trudną sytuację w kraju.
+
+Mumbai i Bengaluru (Indie): W dolnej prawej części (wysokie PC1, niskie PC2), sugerują dobrą sytuację mieszkaniową, niski poziom tolerancji, bezpieczeństwa i jakości środowiska, ale wysoką aktywność startupową, dostępność kapitału i bogatą ofertę czasu wolnego, szczególnie w technologicznym Bengaluru. Mumbai jako centrum finansowe również wykazuje te cechy. Podobnie Delhi (Indie) w tym samym obszarze, charakteryzuje się dobrą sytuacją mieszkaniową, niższym poziomem tolerancji i środowiska, lecz dynamicznym środowiskiem startupowym i kulturalnym.
+
+Singapur: Położony nisko i lekko na lewo (niskie PC1, niskie PC2), sugeruje relatywnie gorszą sytuację mieszkaniową, ale wyższy poziom edukacji, swobody gospodarczej, opieki zdrowotnej i dostępu do internetu. Niska wartość PC2 wskazuje na niższy poziom tolerancji i bezpieczeństwa oraz jakość środowiska, ale wysoką aktywność startupową i bogatą ofertę kulturalną. Wysokie koszty życia i nieruchomości w Singapurze kontrastują z doskonałą edukacją i gospodarką opartą na innowacjach.
+
+Paryż (Francja): W lewym dolnym kwadrancie (niskie PC1, niskie PC2), wskazuje na gorszą sytuację mieszkaniową (choć lepszą niż Singapur), wysoki poziom edukacji, swobody gospodarczej i opieki zdrowotnej. Podobnie jak Singapur, niska wartość PC2 sugeruje niższy poziom tolerancji i środowiska, ale wysoką aktywność startupową i bogatą kulturę. Wysokie ceny nieruchomości w Paryżu idą w parze z silną gospodarką i bogatym życiem kulturalnym.
+
+Los Angeles (USA): W lewym dolnym rogu (niskie PC1, bardzo niskie PC2), sugeruje znacząco gorszą sytuację mieszkaniową, ale wysoki poziom edukacji, swobody gospodarczej i opieki zdrowotnej. Bardzo niska wartość PC2 wskazuje na niski poziom tolerancji i środowiska, ale bardzo wysoką aktywność startupową i ofertę kulturalną. Wysokie koszty nieruchomości i problemy społeczne w Los Angeles kontrastują z dynamiczną gospodarką i przemysłem rozrywkowym.
+
+## Analiza korelacji
+
+Zacznijmy od przeanalizowania macierzy korelacji, aby później porównać wnioski z dwuwykresem.
+```{r macierz-korelacji, echo=FALSE, fig.width=6, fig.height=4, fig.cap="\\label{fig:macierzkorelacji}Macierz korelacji zmiennych"}
+# Obliczanie macierzy korelacji
+cor_matrix <- cor(daneIlosciowe)
+
+# Wersja graficzna: biblioteka corrplot
+library(corrplot)
+corrplot(cor_matrix, method = "color", type = "full", order = "hclust",
+         tl.cex = 0.6, tl.col = "black", col = colorRampPalette(c("lightpink", "white", "darkblue"))(200))
+
+```
+
+Analiza korelacji między cechami miast przedstawiona na wykresie ujawnia kilka istotnych zależności. Wysoki standard mieszkaniowy wiąże się z wyższymi kosztami życia, ale jednocześnie z niższym poziomem edukacji i gorszą kondycją ekonomiczną. Z kolei wysokie koszty życia idą w parze z niższą jakością środowiska.
+
+Środowisko sprzyjające powstawaniu startupów jest silnie powiązane z dostępnością kapitału inwestycyjnego i w mniejszym stopniu z bogatą ofertą kulturalno-rozrywkową. Kapitał wysokiego ryzyka wykazuje również lekką pozytywną korelację z poziomem wykształcenia mieszkańców.
+
+Komunikacja miejska koreluje słabo dodatnio z dostępem do opieki zdrowotnej i poziomem edukacji, podobnie jak dojazdy do pracy i opieka zdrowotna. Wolność prowadzenia działalności gospodarczej silnie koreluje z lepszą opieką zdrowotną, wyższym poziomem edukacji, lepszą jakością środowiska i dobrą kondycją ekonomiczną, natomiast słabiej i negatywnie z cenami mieszkań. Bezpieczeństwo wydaje się być powiązane z tolerancją.
+
+Opieka zdrowotna jest dodatnio skorelowana z poziomem edukacji i jakością środowiska. Interesującym jest fakt, że wyższy poziom wykształcenia wiąże się z niższą jakością środowiska, słabszą gospodarką i mniejszym dostępem do internetu. Kondycja ekonomiczna nie wykazuje znaczących korelacji poza wspomnianymi. Opodatkowanie nie jest silnie powiązane z innymi zmiennymi, choć zauważalna jest lekka korelacja z bezpieczeństwem. Dostęp do internetu, oprócz negatywnej korelacji z edukacją, pozytywnie koreluje z wolnością gospodarczą i w mniejszym stopniu z jakością środowiska. Oferta kulturalno-rozrywkowa jest słabo powiązana jedynie ze zmienną dotyczącą startupów. Tolerancja silnie koreluje z jakością środowiska i opieką zdrowotną. Aktywności na świeżym powietrzu wykazują słabe powiązania ze startupami, ofertą kulturalno-rozrywkową i kapitałem venture.
+
+
+```{r extrabilot, echo=FALSE ,fig.width=10, fig.height=6, fig.cap="\\label{fig:biplot1}PC1 vs PC2 wg kontynentu"}
+
+fviz_pca_biplot(pca,
+                label = "var",      # pokazuj tylko zmienne
+                habillage = danePCA$UA_Continent, # kolor wg kontynentu
+                addEllipses = TRUE,
+                col.var = "black",
+                repel = TRUE) +
+  ggtitle("Biplot: PC1 vs PC2 wg kontynentu")
+```
+
+Z Rysunku \ref{fig:biplot1} możemy wywnioskować, że miasta z poszczególnych kontynentów tworzą wyraźne grupy, co potwierdza istnienie podobieństw oraz różnic wewnątrz regionów, kontynentów.
+
+Dwuwykres głównych składowych (PC1 i PC2), wyjaśniający łącznie 45% wariancji, prezentuje rozkład miast oraz wpływ poszczególnych zmiennych. Długie, zbliżone wektory zmiennych takich jak edukacja, wolność gospodarcza, jakość środowiska i opieka zdrowotna wskazują na ich silną, pozytywną korelację i sugerują wspólny czynnik rozwoju społeczno-ekonomicznego, który znacząco kształtuje PC1. Koszty życia znajdują się po przeciwnej stronie, co implikuje ich negatywny związek z tymi wskaźnikami.
+
+Startup-y, kapitał wysokiego ryzyka oraz kultura tworzą odrębną grupę, wykazując silną korelację między sobą, ale słabszą z innymi zmiennymi społecznymi, co może odzwierciedlać niezależny wymiar przedsiębiorczości i aktywności miejskiej. Bezpieczeństwo jest powiązane z Tolerancją i Opeką Zdrowotną. Prostopadłe ustawienie wektorów, np. opodatkowania względem edukacji i startup-ów, sugeruje brak silnej korelacji. Długość wektorów wskazuje, że edukacja i wolność gospodarcza są lepiej reprezentowane w przestrzeni PC1 i PC2 niż opodatkowanie czy aktywności na świeżym powietrzu.
+
+Analiza rozmieszczenia kontynentów ujawnia, że miasta Europy, Oceanii i Ameryki Północnej charakteryzują się wyższymi wartościami zmiennych społeczno-gospodarczych. Miasta Afryki i część Azji są bliżej zmiennych związanych z mieszkaniami i kosztami życia. Miasta Ameryki Południowej grupują się w obszarze wysokich kosztów życia, cen mieszkań i opodatkowania, będąc jednocześnie oddalone od zmiennych takich jak edukacja, jakość środowiska czy wolność gospodarcza, co sugeruje odmienne priorytety lub wyzwania rozwojowe w tych regionach. Ogólnie, położenie kontynentów wskazuje na wyższy poziom rozwoju społecznego i infrastrukturalnego w Europie, Ameryce Północnej i Oceanii, w przeciwieństwie do części miast azjatyckich, południowoamerykańskich i afrykańskich, które mogą skupiać się na innych aspektach rozwoju.
+
+Zarówno dwuwykres, jak i macierz korelacji dostarczają komplementarnych wniosków. Dwuwykres oferuje intuicyjną wizualizację struktury zależności, podczas gdy analiza korelacji zapewnia precyzyjne, liczbowe oceny powiązań między zmiennymi, tworząc razem pełniejszy obraz analizowanych danych.
+
+## Wnioski końcowe
+
+Przeprowadzona w dokumencie analiza Principal Component Analysis (PCA) dostarczyła szeregu istotnych wniosków dotyczących struktury danych opisujących jakość życia w różnych miastach świata. Analiza ta pozwoliła na zredukowanie złożoności danych poprzez identyfikację głównych składowych, które w efektywny sposób wyjaśniają większość zaobserwowanej zmienności.
+
+Jednym z kluczowych rezultatów analizy jest ujawnienie złożonych relacji między różnymi wskaźnikami jakości życia. Na przykład, zaobserwowano, że wysoki standard mieszkaniowy jest często powiązany z wyższymi kosztami życia, co jest zgodne z intuicją ekonomiczną. Jednakże, co ciekawe, może on również korelować z niższym poziomem edukacji i gorszą kondycją ekonomiczną, co sugeruje potencjalne nierówności społeczne. Z kolei środowisko sprzyjające rozwojowi startupów wykazuje silne powiązanie z dostępnością kapitału wysokiego ryzyka, co podkreśla kluczową rolę inwestycji w innowacyjność miejską.
+
+Analiza PCA umożliwiła również identyfikację charakterystycznych profilów miast z różnych kontynentów. Miasta europejskie, zlokalizowane w Oceanii i Ameryce Północnej, generalnie charakteryzują się wyższymi wartościami wskaźników społeczno-gospodarczych, co wskazuje na ich relatywnie wysoki poziom rozwoju. Natomiast miasta afrykańskie i część azjatyckich często wykazują większy nacisk na wskaźniki związane z mieszkaniami i kosztami życia, co może odzwierciedlać odmienne priorytety rozwojowe lub wyzwania, z którymi się te regiony mierzą. Miasta Ameryki Południowej wyróżniają się skupieniem na wysokich kosztach życia, cenach mieszkań i opodatkowaniu, przy jednoczesnym oddaleniu od zmiennych takich jak edukacja czy jakość środowiska, co sugeruje specyficzne uwarunkowania ekonomiczne i społeczne tego regionu.
+
+Kluczowym aspektem metodologicznym analizy PCA była konieczność standaryzacji danych. Zróżnicowany rozrzut i wariancja między analizowanymi cechami ilościowymi wymusiły zastosowanie tej procedury, aby zapewnić, że każda zmienna wnosi równy wkład do analizy. Standaryzacja umożliwiła obiektywne porównanie zmiennych o różnych skalach i jednostkach, co jest fundamentalne dla poprawnego działania PCA i interpretacji uzyskanych wyników.

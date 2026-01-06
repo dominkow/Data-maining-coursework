@@ -1,0 +1,1259 @@
+---
+title: "Raport Lista 2"
+author: "Dominik Kowalczyk i Matylda Mordal"
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+    toc: true
+    fig_caption: true
+    fig_width: 5
+    fig_height: 4
+    number_sections: true
+  html_document:
+    toc: true
+    df_print: paged
+header-includes:
+- \usepackage[OT4]{polski}
+- \usepackage[utf8]{inputenc}
+- \usepackage{graphicx}
+- \usepackage{float}
+subtitle: Eksploracja danych
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, results = 'asis')
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(RColorBrewer)
+library(e1071)
+library(gridExtra) 
+library(tidyr)
+library(summarytools)
+library(purrr)
+library(arules)
+library(cluster)
+library(mclust)
+library(discretization)
+library(titanic)
+library(MASS)
+library(ggrepel)
+library(factoextra)
+```
+
+# Dyskretyzacja cech ciągłych
+
+## Dane `iris`
+
+
+Zbiór danych *iris*, dostępny w pakiecie `datasets` języka R, stanowi jeden z najbardziej znanych i często wykorzystywanych zestawów danych. Dane te pochodzą z pracy Ronalda Fishera z 1936 roku i przedstawiają pomiary dotyczące trzech gatunków irysów: `setosa`, `versicolor` oraz `virginica`. Jak wynika z Tabeli \ref{tab:ObserwacjeGatunki}, każdy gatunek reprezentowany jest przez 50 obserwacji, co daje łącznie 150 przypadków.
+
+Zbiór danych zawiera 5 cech: cztery zmienne ilościowe oraz zmienną klasyfikującą gatunek rośliny. Cztery zmienne numeryczne to: długość działki kielicha (`Sepal.Length`), szerokość działki kielicha (`Sepal.Width`), długość płatka (`Petal.Length`) oraz szerokość płatka (`Petal.Width`), wszystkie wyrażone w centymetrach. Piątą zmienną jest `Species`, która określa gatunek rośliny, przypisując jeden z trzech wymienionych wyżej gatunków. Szczegóły dotyczące tych zmiennych przedstawiono w Tabeli \ref{tab:TypyIris}.
+
+Co więcej, zbiór danych `iris` jest kompletny, co oznacza, że nie zawiera brakujących wartości. 
+
+
+
+```{r dane_iris, message=FALSE, warning=FALSE, echo=FALSE}
+# Załadowanie danych
+data(iris)
+
+# Liczba przypadków (wierszy) i cech (kolumn)
+#dim(iris)
+
+# Liczba obserwacji dla poszczególnych gatunków w zbiorze iris
+gatunki_observations <- table(iris$Species)
+
+# Tworzymy ramkę danych z wynikami
+gatunki_tabela <- data.frame(
+  "Gatunek" = names(gatunki_observations),
+  "Liczba obserwacji" = as.vector(gatunki_observations),
+  check.names = FALSE
+)
+
+# Generowanie tabeli
+kable(gatunki_tabela, 
+      caption = "Liczba obserwacji dla poszczególnych gatunków w zbiorze iris  \\label{tab:ObserwacjeGatunki}",
+      align = c('l', 'c'),
+      col.names = c("Gatunek", "Liczba obserwacji"), 
+      row.names = FALSE)
+
+
+# Tworzymy ramkę danych z informacjami o zmiennych
+iris_info <- data.frame(
+  Indeks = seq_along(names(iris)),
+  "Nazwa zmiennej" = names(iris),
+  "Typ zmiennej" = sapply(iris, class),
+  "Opis zmiennej" = c(
+    "Długość działki kielicha w cm",
+    "Szerokość działki kielicha w cm",
+    "Długość płatka w cm",
+    "Szerokość płatka w cm",
+    "Gatunek rośliny (setosa, versicolor, virginica)"
+  ),
+  check.names = FALSE
+)
+
+# Tworzymy tabelę
+kable(iris_info, caption = "Typy zmiennych w zbiorze iris \\label{tab:TypyIris}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+# Sprawdzamy dane puste, ze spacją oraz gdzie występuje NULL
+braki_kolumny_iris <- colSums(is.na(iris)) + 
+                colSums(iris == "", na.rm = TRUE) +
+                colSums(iris == " ", na.rm = TRUE) +
+                colSums(iris == "NULL", na.rm = TRUE)
+
+# Tworzenie ramki danych tylko dla kolumn z brakami
+braki_tabela_iris <- data.frame(
+  "Kolumna" = names(braki_kolumny_iris[braki_kolumny_iris > 0]),
+  "Liczba braków" = braki_kolumny_iris[braki_kolumny_iris > 0],
+  "Procent braków" = round(braki_kolumny_iris[braki_kolumny_iris > 0] / nrow(iris) * 100, 2),
+  check.names = FALSE
+)
+
+# Generowanie tabeli tylko jeśli są braki
+if (nrow(braki_tabela_iris) > 0) {
+  kable(braki_tabela_iris, 
+        caption = "Braki danych w zmiennych zbioru iris \\label{tab:BrakiIris}",
+        align = c('l', 'c', 'c'),
+        col.names = c("Zmienna", "Liczba braków", "Procent braków"), 
+        row.names = FALSE, 
+        format = "latex", 
+        booktabs = TRUE) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  latex_options = c("hold_position"),
+                  full_width = FALSE)
+}
+
+```
+
+## Wybór cech na podstawie zdolności dyskryminacyjnej
+
+```{r analiza_tabele, message=FALSE, warning=FALSE, echo=FALSE}
+numeric_zmienne <- c("Sepal.Length", "Sepal.Width", "Petal.Length", "Petal.Width")
+
+# Funkcja do tworzenia statystyk 
+tworz_tabele_statystyk <- function(dane) {
+  data.frame(
+    Min = sapply(dane[numeric_zmienne], min, na.rm = TRUE),
+    Max = sapply(dane[numeric_zmienne], max, na.rm = TRUE),
+    Q1 = sapply(dane[numeric_zmienne], quantile, 0.25, na.rm = TRUE),
+    Mediana = sapply(dane[numeric_zmienne], median, na.rm = TRUE),
+    Średnia = sapply(dane[numeric_zmienne], mean, na.rm = TRUE),
+    Q3 = sapply(dane[numeric_zmienne], quantile, 0.75, na.rm = TRUE),
+    Zakres = sapply(dane[numeric_zmienne], function(x) diff(range(x, na.rm = TRUE))),
+    Wariancja = sapply(dane[numeric_zmienne], var, na.rm = TRUE),
+    OdchylenieStd = sapply(dane[numeric_zmienne], sd, na.rm = TRUE)
+  )
+}
+
+# Dla każdego gatunku
+iris_setosa <- iris %>% filter(Species == "setosa")
+iris_versicolor <- iris %>% filter(Species == "versicolor")
+iris_virginica <- iris %>% filter(Species == "virginica")
+
+# Tworzymy tabele
+stat_setosa <- tworz_tabele_statystyk(iris_setosa)
+stat_versicolor <- tworz_tabele_statystyk(iris_versicolor)
+stat_virginica <- tworz_tabele_statystyk(iris_virginica)
+
+kable(t(stat_setosa), caption = "Statystyki opisowe – Setosa \\label{tab:StatystykiSetosa}", digits = 2)
+kable(t(stat_versicolor), caption = "Statystyki opisowe – Versicolor \\label{tab:StatystykiVersicolor}", digits = 2)
+kable(t(stat_virginica), caption = "Statystyki opisowe – Virginica \\label{tab:StatystykiVirginica}", digits = 2)
+
+```
+
+Analizując dane przedstawione w tabelach, można zauważyć różnice między cechami różnych gatunków irysów, co pozwala na ocenę ich zdolności do dyskryminacji. Spośród czterech cech – `Sepal.Length`, `Sepal.Width`, `Petal.Length` oraz `Petal.Width` – widać wyraźne różnice w zmienności i zakresie wartości dla poszczególnych gatunków.
+
+Rozpatrując cechę `Sepal.Length`, można dostrzec różnice między gatunkami, jednak nakładanie się zakresów wartości osłabia jej zdolność do wyraźnej separacji klas. Dla Setosy (Tabela \ref{tab:StatystykiSetosa}) zakres wynosi od 4.30 do 5.80, ze średnią 5.01 i odchyleniem standardowym 0.35. Dla Versicolor (Tabela \ref{tab:StatystykiVersicolor}) zakres wynosi od 4.90 do 7.00, ze średnią 5.94 i odchyleniem 0.52. Dla Virginica (Tabela \ref{tab:StatystykiVirginica}) zakres wynosi od 4.90 do 7.90, ze średnią 6.59 i odchyleniem 0.64. Zakresy częściowo się pokrywają: `Setosa` z `Versicolor` w 4.90–5.80, `Versicolor` z `Virginica` w 4.90–7.00. Różnice między średnimi są widoczne, ale pokrywanie się zakresów utrudnia separację.
+
+Badając cechę `Sepal.Width`, widać jej słabą zdolność do rozdzielania klas. Dla Setosy (Tabela \ref{tab:StatystykiSetosa}) zakres wynosi od 2.30 do 4.40, ze średnią 3.43 i odchyleniem 0.38. Dla Versicolor (Tabela \ref{tab:StatystykiVersicolor}) zakres wynosi od 2.00 do 3.40, ze średnią 2.77 i odchyleniem 0.31. Dla Virginica (Tabela \ref{tab:StatystykiVirginica}) zakres wynosi od 2.20 do 3.80, ze średnią 2.97 i odchyleniem 0.32. Zakresy mocno się pokrywają (2.30–3.40 dla Setosa i Versicolor, 2.20–3.40 dla Versicolor i Virginica), a małe różnice między średnimi czynią tę cechę najmniej użyteczną.
+
+Oceniając cechę `Petal.Length`, dostrzega się jej wysoką zdolność dyskryminacyjną. Dla Setosy (Tabela \ref{tab:StatystykiSetosa}) zakres wynosi od 1.00 do 1.90, ze średnią 1.46 i odchyleniem 0.17. Dla Versicolor (Tabela \ref{tab:StatystykiVersicolor}) zakres wynosi od 3.00 do 5.10, ze średnią 4.26 i odchyleniem 0.47. Dla Virginica (Tabela \ref{tab:StatystykiVirginica}) zakres wynosi od 4.50 do 6.90, ze średnią 5.55 i odchyleniem 0.55. Zakresy są niemal rozłączne, z minimalnym pokryciem (4.50–5.10 dla Versicolor i Virginica). Duże różnice między średnimi wspierają doskonałą separację.
+
+Przyglądając się cesze `Petal.Width`, można zauważyć jej dobrą zdolność dyskryminacyjną. Dla Setosy (Tabela \ref{tab:StatystykiSetosa}) zakres wynosi od 0.10 do 0.60, ze średnią 0.25 i odchyleniem 0.11. Dla Versicolor (Tabela \ref{tab:StatystykiVersicolor}) zakres wynosi od 1.00 do 1.80, ze średnią 1.33 i odchyleniem 0.20. Dla Virginica (Tabela \ref{tab:StatystykiVirginica}) zakres wynosi od 1.40 do 2.50, ze średnią 2.03 i odchyleniem 0.27. Zakresy mało się pokrywają (1.40–1.80 dla `Versicolor` i `Virginica`). Różnice między średnimi wspierają dobrą separację.
+
+```{r analiza_wykresy_rozrzutu, echo=FALSE, fig.cap="\\label{fig:RozrzutyIris}Wykresy gęstości dla gatunków irysa", fig.height=4, fig.width=8, message=FALSE, warning=FALSE}
+# Kolory dla gatunków
+species_colors <- c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")
+
+set.seed(123)  # Dla powtarzalności losowości
+
+# Wartości y
+iris_jitter <- iris
+iris_jitter$y1 <- runif(nrow(iris_jitter), 0, 1)
+iris_jitter$y2 <- runif(nrow(iris_jitter), 0, 1)
+iris_jitter$y3 <- runif(nrow(iris_jitter), 0, 1)
+iris_jitter$y4 <- runif(nrow(iris_jitter), 0, 1)
+
+# Wykresy rozrzutu
+s1 <- ggplot(iris_jitter, aes(x = Sepal.Length, y = y1, color = Species)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = species_colors) +
+  theme_minimal() +
+  labs(title = "Sepal.Length w zależności od gatunku irysa", y = "", x = "Sepal.Length", color = "Gatunek")
+
+s2 <- ggplot(iris_jitter, aes(x = Sepal.Width, y = y2, color = Species)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = species_colors) +
+  theme_minimal() +
+  labs(title = "Sepal.Width w zależności od gatunku irysa", y = "", x = "Sepal.Width", color = "Gatunek")
+
+s3 <- ggplot(iris_jitter, aes(x = Petal.Length, y = y3, color = Species)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = species_colors) +
+  theme_minimal() +
+  labs(title = "Petal.Length w zależności od gatunku irysa", y = "", x = "Petal.Length", color = "Gatunek")
+
+s4 <- ggplot(iris_jitter, aes(x = Petal.Width, y = y4, color = Species)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = species_colors) +
+  theme_minimal() +
+  labs(title = "Petal.Width w zależności od gatunku irysa", y = "", x = "Petal.Width", color = "Gatunek")
+
+# Układ 2x2
+grid.arrange(s1, s2, s3, s4, nrow = 2)
+
+```
+
+Wykresy rozrzutu przedstawione na Rysunku \ref{fig:RozrzutyIris} pokazują zależności między czterema cechami irysów: `Sepal.Length`, `Sepal.Width`, `Petal.Length` i `Petal.Width` w zależności od gatunku (setosa, versicolor, virginica). Analiza tych wykresów wskazuje, że cecha `Petal.Length` najlepiej separuje gatunki, ponieważ punkty reprezentujące setosę, versicolor i virginikę są wyraźnie rozróżnialne, z minimalnym nakładaniem się między klasami. `Petal.Width` również dobrze rozdziela gatunki, choć między versicolor a virginica widoczne jest nieco większe pokrywanie się punktów. Z kolei `Sepal.Width` ma najsłabszą zdolność dyskryminacyjną, gdyż punkty wszystkich gatunków mocno się na siebie nakładają, co utrudnia odróżnienie klas. `Sepal.Length` także wykazuje pewne pokrywanie się, szczególnie między versicolor a virginica, przez co jest mniej skuteczna w separacji.
+
+
+```{r analiza_wykresy_boxploty, fig.width=8, fig.height=4, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:BoxplotIris}Wykresy pudełkowe dla gatunków irysa"}
+# Kolory dla gatunków
+species_colors <- c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")
+
+# Tworzenie boxplotów
+b1 <- ggplot(iris, aes(x = Species, y = Sepal.Length, fill = Species)) + geom_boxplot() + scale_fill_manual(values = species_colors) + labs(x = "Gatunek", fill = "Gatunek") + theme_minimal()
+b2 <- ggplot(iris, aes(x = Species, y = Sepal.Width, fill = Species)) + geom_boxplot() + scale_fill_manual(values = species_colors) + labs(x = "Gatunek", fill = "Gatunek") + theme_minimal()
+b3 <- ggplot(iris, aes(x = Species, y = Petal.Length, fill = Species)) + geom_boxplot() + scale_fill_manual(values = species_colors) + labs(x = "Gatunek", fill = "Gatunek") + theme_minimal()
+b4 <- ggplot(iris, aes(x = Species, y = Petal.Width, fill = Species)) + geom_boxplot() + scale_fill_manual(values = species_colors) + labs(x = "Gatunek", fill = "Gatunek") + theme_minimal()
+
+# Układ wykresów 2x2
+grid.arrange(b1, b2, b3, b4, nrow = 2)
+
+```
+
+Wykresy pudełkowe na Rysunku \ref{fig:BoxplotIris} potwierdzają wnioski płynące z analizy rozrzutu. W przypadku `Petal.Length` pudełka dla setosy, versicolor i virginica prawie nie pokrywają się, co świadczy o wysokiej zdolności dyskryminacyjnej tej cechy, a brak widocznych mocno odstających wartości dla żadnego z gatunków dodatkowo podkreśla jej stabilność. `Petal.Width` również dobrze separuje klasy, choć wartości versicolor i virginica minimalnie się nakładają. Najgorzej wypada `Sepal.Width`, gdzie pudełka wszystkich gatunków, szczególnie versicolor i virginica, w dużej mierze się pokrywają, a dla setosy i virginica widoczne są wartości odstające, co sugeruje większą niejednorodność danych w tych grupach. `Sepal.Length`, choć nieco lepsza od `Sepal.Width`, nadal pokazuje znaczne nakładanie się wartości między versicolor a virginica, a dla virginica można zauważyć pojedyncze wartości odstające, co ogranicza jej przydatność w separacji klas.
+
+Podsumowując `Petal.Length` jest najlepszą cechą do dyskryminacji gatunków irysów dzięki niemal rozłącznym zakresom wartości i wyraźnej separacji klas. `Petal.Width` również dobrze separuje gatunki, choć z lekkim pokryciem między Versicolor a Virginica. `Sepal.Length` jest mniej skuteczna z powodu częściowego nakładania się zakresów, a `Sepal.Width` jest najgorsza, ponieważ nie pozwala na wyraźne rozróżnienie gatunków z uwagi na duże pokrywanie się wartości i małą różnicę między średnimi.
+
+## Porównanie nienadzorowanych metod dyskretyzacji
+
+### Zmienna o największej zdolności do dyskryminacji - Petal.Length
+
+```{r porownanie_metod_dyskretyzacji_petal_tabela, message=FALSE, warning=FALSE, echo=FALSE}
+# Wybór cech
+cechy <- iris[, c("Petal.Length", "Sepal.Width")]
+
+K <- 3
+
+# Equal Width
+cechy$Petal.Length_eqw <- discretize(cechy$Petal.Length, method = "interval", categories = K)
+# Equal Frequency
+cechy$Petal.Length_eqf <- discretize(cechy$Petal.Length, method = "frequency", categories = K)
+# K-means
+cechy$Petal.Length_kmeans <- discretize(cechy$Petal.Length, method = "cluster", categories = K)
+# Ręczne przedziały
+cechy$Petal.Length_manual <- discretize(cechy$Petal.Length, method = "fixed", breaks = c(0, 2, 5, 7))
+
+# Tworzymy tabelę
+tabela_petal <- data.frame(
+  Equal_Width = table(cechy$Petal.Length_eqw),
+  Equal_Frequency = table(cechy$Petal.Length_eqf),
+  KMeans = table(cechy$Petal.Length_kmeans),
+  Manual = table(cechy$Petal.Length_manual)
+)
+
+# Transpozycja tabeli
+tabela_trans_pedal <- t(tabela_petal)
+
+# Ustawienie nazw wierszy
+rownames(tabela_trans_pedal) <- c("Equal Width Przedziały", "Equal Width Liczebność",
+                            "Equal Frequency Przedziały", "Equal Frequency Liczebność",
+                            "K-Means Przedziały", "K-Means Liczebność",
+                            "Ręczne Przedziały", "Ręczne Przedziały Liczebność")
+
+# Ustawienie nazw kolumn
+colnames(tabela_trans_pedal) <- c("Przedział 1", "Przedział 2", "Przedział 3")
+
+# Wyświetlenie tabeli
+kable(tabela_trans_pedal, caption = "Porównanie dyskretyzacji - Petal.Length \\label{tab:DyskretyzacjaPedal}")
+
+```
+
+```{r porownanie_metod_dyskretyzacji_petal_wykresy, fig.width=8, fig.height=4, message=FALSE, warning=FALSE, echo=FALSE, fig.cap = "\\label{fig:hist_petal}Histogramy Petal.Length z oznaczonymi granicami przedziałów dla różnych metod dyskretyzacji"}
+# Wyznaczenie breaks
+breaks_petal_eqw <- attributes(cechy$Petal.Length_eqw)$"discretized:breaks"
+breaks_petal_eqf <- attributes(cechy$Petal.Length_eqf)$"discretized:breaks"
+breaks_petal_kmeans <- attributes(cechy$Petal.Length_kmeans)$"discretized:breaks"
+breaks_petal_manual <- attributes(cechy$Petal.Length_manual)$"discretized:breaks"
+
+# Funkcja do tworzenia histogramu
+rysuj_histogram <- function(dane, breaks, title) {
+  ggplot(dane, aes(x = Petal.Length)) +
+    geom_histogram(bins = 30, fill = "lightblue", color = "black") +
+    geom_vline(xintercept = breaks, color = "red", linetype = "dashed", size = 1.2) +
+    labs(y = "Liczba") +
+    ggtitle(title) +
+    theme_minimal()
+}
+
+# Rysowanie wszystkich histogramów
+plot_petal_eqw <- rysuj_histogram(cechy, breaks_petal_eqw, "Equal Width")
+plot_petal_eqf <- rysuj_histogram(cechy, breaks_petal_eqf, "Equal Frequency")
+plot_petal_kmeans <- rysuj_histogram(cechy, breaks_petal_kmeans, "K-Means")
+plot_petal_manual <- rysuj_histogram(cechy, breaks_petal_manual, "Ręczne przedziały")
+
+grid.arrange(plot_petal_eqw, plot_petal_eqf, plot_petal_kmeans, plot_petal_manual, ncol = 2)
+```
+
+Porównanie nienadzorowanych metod dyskretyzacji dla cechy `Petal.Length`, przedstawione w Tabeli \ref{tab:DyskretyzacjaPedal} oraz na Rysunku \ref{fig:hist_petal}, pozwala na analizę czterech podejść: Equal Width, Equal Frequency, K-Means oraz dyskretyzacji ręcznej, przy założeniu podziału na trzy kategorie (K=3).
+
+Metoda Equal Width dzieli zakres wartości Petal.Length na równe przedziały: [1, 2.97), [2.97, 4.93), [4.93, 6.9], z liczebnościami odpowiednio 50, 54 i 46. Histogram dla tej metody pokazuje dość równomierny rozkład, choć w przedziale [2.97, 4.93) obserwujemy największą koncentrację danych. Z kolei metoda Equal Frequency zapewnia równą liczebność w każdej kategorii (50, 49, 51), a przedziały to [1, 2.63), [2.63, 4.9), [4.9, 6.9]. Na histogramie widać, że przedziały są nierównej szerokości, co odzwierciedla różną gęstość danych – pierwszy przedział jest węższy, co wskazuje na większą koncentrację mniejszych wartości.
+
+Metoda K-Means, oparta na grupowaniu, generuje przedziały [1, 2.95), [2.95, 5.13), [5.13, 6.9] z liczebnościami 50, 66 i 34. Histogram ujawnia, że środkowy przedział jest szerszy i obejmuje więcej obserwacji, co sugeruje, że K-Means lepiej oddaje naturalne skupiska danych, ale prowadzi do nierównowagi w liczebnościach. Natomiast dyskretyzacja ręczna z przedziałami [0, 2), [2, 5), [5, 7] daje liczebności 50, 54 i 46. Histogram pokazuje, że ręczne ustalenie przedziałów może nie w pełni odpowiadać rozkładowi danych, szczególnie w środkowym przedziale, który obejmuje większą ilość obserwacj.
+
+```{r porownanie_metod_dyskretyzacji_petal_gatunki_tabele, message=FALSE, warning=FALSE, echo=FALSE}
+# Equal Width
+tab_petal_eqw <- table(cechy$Petal.Length_eqw, iris$Species)
+kable(tab_petal_eqw, caption = "Petal.Length - Equal Width w podziale na gatunki \\label{tab:PetalWidth}")
+
+# Equal Frequency
+tab_petal_eqf <- table(cechy$Petal.Length_eqf, iris$Species)
+kable(tab_petal_eqf, caption = "Petal.Length - Equal Frequency w podziale na gatunki \\label{tab:PetalFrequency}")
+
+# K-Means
+tab_petal_kmeans <- table(cechy$Petal.Length_kmeans, iris$Species)
+kable(tab_petal_kmeans, caption = "Petal.Length - K-Means w podziale na gatunki \\label{tab:PetalMeans}")
+
+# Manual
+tab_petal_manual <- table(cechy$Petal.Length_manual, iris$Species)
+kable(tab_petal_manual, caption = "Petal.Length - Ręczne przedziały w podziale na gatunki \\label{tab:PetalManual}")
+```
+
+Na podstawie wyników przedstawionych na Rysunkach \ref{fig:PetalWykresy} i \ref{fig:scatter_petal} oraz w Tabelach \ref{tab:PetalWidth}, \ref{tab:PetalFrequency}, \ref{tab:PetalMeans} i \ref{tab:PetalManual} można ocenić, która metoda podziału cechy Petal.Length najlepiej oddziela trzy gatunki irysa: setosa, versicolor i virginica. 
+
+Analiza przedstawionych tabel pozwala ocenić skuteczność różnych metod dyskretyzacji długości płatków w rozróżnianiu gatunków irysów. Co istotne, najlepszą separację gatunku setosa, wyróżniającego się najkrótszymi płatkami, zaobserwowano we wszystkich zastosowanych metodach.Warto jednak zauważyć, że metoda K-Means (Tabela \ref{tab:PetalMeans}) wydaje się szczególnie skuteczna w oddzieleniu setosa od versicolor i virginica, tworząc wyodrębnioną grupę dla tego gatunku, przy czym dodatkowo w ostatnim przedziale nie występuje ani jedna obserwacja innego gatunku niż virginica. Natomiast rozróżnienie między versicolor a virginica stanowi wyzwanie dla wszystkich metod, co sugeruje znaczne podobieństwo w długości ich płatków. Najbardziej efektywne w rozróżnianiu versicolor i virginica okazują się metody Equal Frequency i Equal Width (Tabele \ref{tab:PetalFrequency} i \ref{tab:PetalWidth}) oraz ręcznie ustalone przedziały (Tabela \ref{tab:PetalManual}).Metoda K-Means (Tabela \ref{tab:PetalMeans}) wypada tylko nieco gorzej w tym aspekcie.
+
+```{r porownanie_metod_dyskretyzacji_petal_gatunki_wykresy, fig.width=8, fig.height=4, message=FALSE, warning=FALSE, echo=FALSE, fig.cap = "\\label{fig:PetalWykresy}Wykresy Petal.Length względem gatunków irysa"}
+
+# Łączenie danych, zachowując unikalne kolumny
+iris_cechy <- merge(iris, cechy, by = "row.names", all = TRUE)
+iris_cechy <- iris_cechy[, -1]  # Usunięcie kolumny 'Row.names'
+
+# Wykresy bez prefiksu w nazwach kolumn
+p1 <- ggplot(iris_cechy, aes(x = Petal.Length_eqf, fill = Species)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(title = "Petal.Length - Equal Frequency", x = "Przedziały", y = "Liczba", fill = "Gatunek") +
+  scale_fill_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+  theme_minimal()
+
+p2 <- ggplot(iris_cechy, aes(x = Petal.Length_eqw, fill = Species)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(title = "Petal.Length - Equal Width", x = "Przedziały", y = "Liczba", fill = "Gatunek") +
+  scale_fill_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+  theme_minimal()
+
+p3 <- ggplot(iris_cechy, aes(x = Petal.Length_kmeans, fill = Species)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(title = "Petal.Length - K-Means", x = "Przedziały", y = "Liczba", fill = "Gatunek") +
+  scale_fill_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+  theme_minimal()
+
+p4 <- ggplot(iris_cechy, aes(x = Petal.Length_manual, fill = Species)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(title = "Petal.Length - Ręczne przedziały", x = "Przedziały", y = "Liczba", fill = "Gatunek") +
+  scale_fill_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+  theme_minimal()
+
+grid.arrange(p2, p1, p3, p4, nrow = 2)
+```
+Wizualizacja danych na Rysunku \ref{fig:PetalWykresy}, przedstawiająca histogramy długości płatków (`Petal.Length`) dla różnych gatunków irysów i metod dyskretyzacji, można wizualnie potwierdzić wnioski z tabel. Wszystkie metody skutecznie wyodrębniają gatunek setosa (kolor jasnoniebieski) w najniższych przedziałach długości płatków. Histogram dla metody K-Means wyraźnie pokazuje dominację setosy w pierwszym przedziale oraz brak gatunku versicolor (kolor zielony) w ostatnim przedziale. Natomiast nakładanie się słupków dla gatunków versicolor (kolor zielony) i virginica (kolor różowy) we wszystkich histogramach odzwierciedla trudność w ich rozróżnieniu na podstawie samej długości płatków.
+
+```{r porownanie_metod_dyskretyzacji_petal_gatunki_wykresy2, fig.width=8, fig.height=4, message=FALSE, warning=FALSE, echo=FALSE, fig.cap = "\\label{fig:scatter_petal}Wykresy punktowe Petal.Length z granicami przedziałów dla różnych metod dyskretyzacji"}
+
+cechy$Species <- iris$Species
+
+# Funkcja do tworzenia wykresu punktowego z losowym y
+rysuj_scatter_losowe_y <- function(dane, breaks, title) {
+  dane$y <- runif(nrow(dane), min = 0, max = 1)  # losowe wartości y
+  ggplot(dane, aes(x = Petal.Length, y = y, color = Species)) +
+    geom_point(size = 2) +
+    geom_vline(xintercept = breaks, color = "red", linetype = "dashed", size = 1.2) +
+    labs(title = title, x = "Petal Length", y = "", color = "Gatunek") +
+    theme_minimal() +
+    scale_color_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+    ylim(0, 1)
+}
+
+# Tworzenie wykresów z losowym y
+plot_eqw <- rysuj_scatter_losowe_y(cechy, breaks_petal_eqw, "Equal Width")
+plot_eqf <- rysuj_scatter_losowe_y(cechy, breaks_petal_eqf, "Equal Frequency")
+plot_kmeans <- rysuj_scatter_losowe_y(cechy, breaks_petal_kmeans, "K-Means")
+plot_manual <- rysuj_scatter_losowe_y(cechy, breaks_petal_manual, "Ręczne przedziały")
+
+# Wyświetlanie w siatce 2x2
+grid.arrange(plot_eqw, plot_eqf, plot_kmeans, plot_manual, ncol = 2)
+
+```
+Rysunek \ref{fig:scatter_petal}, prezentujący wykresy rozrzutu długości płatków z naniesionymi granicami przedziałów dyskretyzacji, dodatkowo ilustruje skuteczność poszczególnych metod. Pionowe, czerwone linie wyznaczają granice przedziałów. Można zaobserwować, że dla wszystkich metod, punkty odpowiadające setosie (jasnoniebieskie) grupują się po lewej stronie, w przedziałach najmniejszych wartości Petal.Length. Metody Equal Frequency, Equal Width oraz ręcznie ustalone przedziały wydają się tworzyć bardziej wyraźne rozdzielenie między punktami zielonymi (versicolor) a różowymi (virginica) w porównaniu do metody K-Means, gdzie obserwuje się minimalnie większe ich wymieszanie na granicy środkowego i ostatniego przedziału.
+
+
+```{r wspolczynniki_zgodnosci_petal_tabele, message=FALSE, warning=FALSE, echo=FALSE}
+
+# Obliczanie współczynnika zgodności
+agreement_eqw <- compareMatchedClasses(iris_cechy$Species, iris_cechy$Petal.Length_eqw)$diag
+agreement_eqf <- compareMatchedClasses(iris_cechy$Species, iris_cechy$Petal.Length_eqf)$diag
+agreement_kmeans <- compareMatchedClasses(iris_cechy$Species, iris_cechy$Petal.Length_kmeans)$diag
+agreement_manual <- compareMatchedClasses(iris_cechy$Species, iris_cechy$Petal.Length_manual)$diag
+
+# Tworzenie ramki danych 
+agreement_table <- data.frame(
+  Metoda = c("Equal Width", "Equal Frequency", "K-Means", "Ręczne przedziały"),
+  Zgodność = paste0(round(c(agreement_eqw, agreement_eqf, agreement_kmeans, agreement_manual) * 100, 2), "%")
+)
+
+# Wyświetlenie tabeli 
+library(knitr)
+kable(agreement_table, caption = "Współczynnik zgodności dla różnych metod dyskretyzacji - Petal Length \\label{tab:WspolczynnikPetal}")
+
+```
+
+Na podstawie przeprowadzonej analizy różnych metod dyskretyzacji cechy Petal.Length, można wyciągnąć ogólne wnioski dotyczące ich skuteczności w separacji trzech gatunków irysów.
+
+Wszystkie zastosowane metody dyskretyzacji skutecznie wyodrębniają gatunek setosa, co jest widoczne w dominacji tego gatunku w najniższych przedziałach długości płatków we wszystkich tabelach i wykresach. Świadczy to o wyraźnej odmienności setosa pod względem długości płatków od pozostałych dwóch gatunków.
+
+Jednakże, rozróżnienie między gatunkami versicolor i virginica okazuje się znacznie trudniejsze dla wszystkich metod. Obserwujemy nakładanie się liczebności tych gatunków w poszczególnych przedziałach oraz ich mieszanie się na histogramach i wykresach rozrzutu.
+
+Analizując konkretne metody, metoda K-Means wyróżnia się niemal bardzo dobrym oddzieleniem gatunku setosa od pozostałych. Niemniej jednak, w rozróżnianiu versicolor i virginica wypada nieco słabiej w porównaniu z innymi metodami, co znajduje potwierdzenie w najniższym współczynniku zgodności wynoszącym 89.33% (Tabela \ref{tab:WspolczynnikPetal}).
+
+Metody Equal Frequency, Equal Width oraz ręcznie ustalone przedziały wykazują podobną skuteczność w rozróżnianiu versicolor i virginica, co widać po rozkładzie liczebności w odpowiadających im tabelach. Przekłada się to na wyższe współczynniki zgodności, odpowiednio 95.33% i 94.67% dla Equal Frequency i ręcznych przedziałów, oraz 94.67% dla Equal Width (Tabela \ref{tab:WspolczynnikPetal}). Metoda Equal Frequency osiąga nieznacznie najwyższy współczynnik zgodności, co sugeruje, że podział na przedziały o równej liczebności może lepiej oddawać subtelne różnice między versicolor a virginica.
+
+Podsumowując, choć wszystkie metody dyskretyzacji dobrze radzą sobie z identyfikacją setosa, to metoda Equal Frequency wydaje się być najbardziej efektywna w ogólnym rozróżnianiu wszystkich trzech gatunków na podstawie cechy Petal.Length, co potwierdza najwyższy współczynnik zgodności. Metoda K-Means, mimo dobrego oddzielenia setosa, generuje nieco gorsze wyniki w rozróżnianiu pozostałych dwóch gatunków. Metody Equal Width i ręczne przedziały osiągają zbliżone, wysokie wyniki.
+
+
+### Zmienna o najmniejszej zdolności do dyskryminacji - Sepal.Width
+
+```{r porownanie_metod_dyskretyzacji_sepal_tabela, message=FALSE, warning=FALSE, echo=FALSE}
+# Equal Width
+cechy$Sepal.Width_eqw <- discretize(cechy$Sepal.Width, method = "interval", categories = K)
+# Equal Frequency
+cechy$Sepal.Width_eqf <- discretize(cechy$Sepal.Width, method = "frequency", categories = K)
+# K-means
+cechy$Sepal.Width_kmeans <- discretize(cechy$Sepal.Width, method = "cluster", categories = K)
+# Ręczne przedziały
+cechy$Sepal.Width_manual <- discretize(cechy$Sepal.Width, method = "fixed", breaks = c(1.5, 2.8, 3.2, 4.5))
+
+# Tworzymy tabelę
+tabela_sepal <- data.frame(
+  Equal_Width = table(cechy$Sepal.Width_eqw),
+  Equal_Frequency = table(cechy$Sepal.Width_eqf),
+  KMeans = table(cechy$Sepal.Width_kmeans),
+  Manual = table(cechy$Sepal.Width_manual)
+)
+
+# Transpozycja tabeli
+tabela_trans_sepal <- t(tabela_sepal)
+
+# Ustawienie nazw wierszy
+rownames(tabela_trans_sepal) <- c("Equal Width Przedziały", "Equal Width Liczebność",
+                            "Equal Frequency Przedziały", "Equal Frequency Liczebność",
+                            "K-Means Przedziały", "K-Means Liczebność",
+                            "Ręczne Przedziały", "Ręczne Przedziały Liczebność")
+
+# Ustawienie nazw kolumn
+colnames(tabela_trans_sepal) <- c("Przedział 1", "Przedział 2", "Przedział 3")
+
+# Wyświetlenie tabeli
+kable(tabela_trans_sepal, caption = "Porównanie dyskretyzacji - Sepal.Width \\label{tab:DyskretyzacjaSepal}")
+
+```
+
+
+```{r porownanie_metod_dyskretyzacji_sepal_wykresy, fig.width=8, fig.height=4, message=FALSE, warning=FALSE, echo=FALSE, fig.cap = "\\label{fig:hist_sepal}Histogramy Sepal.Width z oznaczonymi granicami przedziałów dla różnych metod dyskretyzacji"}
+# Wyciągnięcie breaks
+breaks_sepal_eqw <- attributes(cechy$Sepal.Width_eqw)$"discretized:breaks"
+breaks_sepal_eqf <- attributes(cechy$Sepal.Width_eqf)$"discretized:breaks"
+breaks_sepal_kmeans <- attributes(cechy$Sepal.Width_kmeans)$"discretized:breaks"
+breaks_sepal_manual <- attributes(cechy$Sepal.Width_manual)$"discretized:breaks"
+
+# Funkcja do tworzenia histogramu
+rysuj_histogram_sepal <- function(dane, breaks, title) {
+  ggplot(dane, aes(x = Sepal.Width)) +
+    geom_histogram(bins = 30, fill = "#CCFFCC", color = "black") +
+    geom_vline(xintercept = breaks, color = "red", linetype = "dashed", size = 1.2) +
+    labs(y = "Liczba") +
+    ggtitle(title) +
+    theme_minimal()
+}
+
+# Rysowanie wszystkich histogramów
+plot_sepal_eqw <- rysuj_histogram_sepal(cechy, breaks_sepal_eqw, "Equal Width")
+plot_sepal_eqf <- rysuj_histogram_sepal(cechy, breaks_sepal_eqf, "Equal Frequency")
+plot_sepal_kmeans <- rysuj_histogram_sepal(cechy, breaks_sepal_kmeans, "K-Means")
+plot_sepal_manual <- rysuj_histogram_sepal(cechy, breaks_sepal_manual, "Ręczne przedziały")
+
+grid.arrange(plot_sepal_eqw, plot_sepal_eqf, plot_sepal_kmeans, plot_sepal_manual, ncol = 2)
+```
+W tym przypadku zmiennej `Sepal.Width` również zastosowano cztery metody dyskretyzacji: Equal Width, Equal Frequency, K-Means oraz dyskretyzację ręczną, z podziałem na trzy kategorie (K=3). Wyniki tego porównania zestawiono w Tabeli \ref{tab:DyskretyzacjaSepal}, natomiast ich wizualizację w formie histogramów przedstawiono na Rysunku \ref{fig:hist_sepal}.
+
+Zacznijmy od metody Equal Width, która dzieli zakres wartości Sepal.Width na trzy równe przedziały: [2, 2.8), [2.8, 3.6), [3.6, 4.4]. Rozkład danych w tej metodzie jest nierównomierny. Chociaż przedziały mają jednakową szerokość, histogram ujawnia wyraźną koncentrację danych w środkowym przedziale, co sugeruje, że największa liczba obserwacji znajduje się w średnich wartościach zmiennej Sepal.Width. Z kolei przedział z wyższymi wartościami ma znacznie mniej obserwacji, co wskazuje na mniejszą liczbę przypadków w tym zakresie.
+
+Przechodząc do metody Equal Frequency, w której liczba obserwacji w każdym z przedziałów jest równa, mamy przedziały [2, 2.9), [2.9, 3.2), [3.2, 4.4]. Dzięki równym liczebnościom przedziały mają różne szerokości. Zauważalne jest, że środkowy przedział jest węższy, co wskazuje na większą koncentrację obserwacji w tym przedziale. Zarówno pierwszy, jak i ostatni przedział charakteryzują się większą szerokością, co może sugerować, że dane w tych obszarach są bardziej rozproszone.
+
+Kolejną metodą jest K-Means, oparta na grupowaniu danych. Ta metoda generuje przedziały [2, 2.69), [2.69, 3.28), [3.28, 4.4] z liczebnościami 24, 83 i 43. Histogram wskazuje na bardziej zróżnicowaną szerokość przedziałów. Środkowy przedział obejmuje największą liczbę obserwacji.
+
+Na koniec, dyskretyzacja ręczna prowadzi do przedziałów [1.5, 2.8), [2.8, 3.2), [3.2, 4.5], z liczebnościami 33, 61 i 56. Histogram pokazuje, że ręczne dopasowanie przedziałów nie odpowiada w pełni rozkładowi danych, szczególnie w przypadku pierwszego przedziału, który obejmuje mniej obserwacji niż pozostałe. Chociaż taka metoda oferuje pewną elastyczność, może jednocześnie prowadzić do mniej precyzyjnej dyskretyzacji.
+
+
+```{r porownanie_metod_dyskretyzacji_sepal_gatunki_tabele, message=FALSE, warning=FALSE, echo=FALSE}
+# Equal Width
+tab_sepal_eqw <- table(cechy$Sepal.Width_eqw, iris$Species)
+kable(tab_sepal_eqw, caption = "Sepal.Width – Equal Width w podziale na gatunki \\label{tab:SepalWidth}")
+
+# Equal Frequency
+tab_sepal_eqf <- table(cechy$Sepal.Width_eqf, iris$Species)
+kable(tab_sepal_eqf, caption = "Sepal.Width – Equal Frequency w podziale na gatunki \\label{tab:SepalFrequency}")
+
+# K-Means
+tab_sepal_kmeans <- table(cechy$Sepal.Width_kmeans, iris$Species)
+kable(tab_sepal_kmeans, caption = "Sepal.Width – K-Means w podziale na gatunki \\label{tab:SepalMeans}")
+
+# Manual
+tab_sepal_manual <- table(cechy$Sepal.Width_manual, iris$Species)
+kable(tab_sepal_manual, caption = "Sepal.Width – Ręczne przedziały w podziale na gatunki \\label{tab:SepalManual}")
+```
+Przyglądając się wynikom zawartym w Tabelach \ref{tab:SepalWidth}, \ref{tab:SepalFrequency}, \ref{tab:SepalMeans} i \ref{tab:SepalManual} oraz na Rysunkach \ref{fig:SepalWykresy} i \ref{fig:scatter_sepal}, możemy przyjrzeć się, która z zastosowanych metod dyskretyzacji cechy `Sepal.Width` najskuteczniej rozdziela trzy odmiany irysa: setosa, versicolor i virginica.
+
+Zauważamy, że w metodzie Equal Width (Tabela  \ref{tab:SepalWidth}), pierwszy przedział niemal nie zawiera setosa, najwięcej obserwacji tego gatunku skupia się w środkowym przedziale, ale z liczną obecnością pozostałych dwóch gatunków, natomiast ostatni przedział zawiera pewną ilość setosa bez versicolor, ale z kilkoma virginica. Podobnie, w metodzie Equal Frequency (Tabela \ref{tab:SepalFrequency}) pierwszy przedział charakteryzuje się niską reprezentacją gatunku setosa, podczas gdy środkowy i ostatni przedział zawierają ich znacznie więcej, choć z domieszką versicolor i virginica. W metodzie K-Means (Tabela \ref{tab:SepalMeans}), pierwszy przedział niemal nie zawiera setosa, środkowy to mieszanka wszystkich gatunków z przewagą versicolor i virginica, a ostatni charakteryzuje się największą liczbą setosa przy stosunkowo niewielkiej liczbie pozostałych gatunków. Wreszcie, w przypadku ręcznie ustalonych przedziałów (Tabela \ref{tab:SepalManual}), pierwszy przedział zawiera najmniej setosa, środkowy to mieszanka gatunków, a ostatni skupia zdecydowaną większość setosa z niewielką domieszką versicolor i virginica. Ogólnie rzecz biorąc, ostatnie przedziały w większości metod wydają się najlepiej identyfikować setosę, choć idealna separacja nie jest osiągnięta w żadnej z nich, a rozróżnienie versicolor i virginica pozostaje trudne we wszystkich analizowanych podziałach `Sepal.Width`.
+
+```{r porownanie_metod_dyskretyzacji_sepal_gatunki_wykresy, fig.width=8, fig.height=4, message=FALSE, warning=FALSE, echo=FALSE, fig.cap = "\\label{fig:SepalWykresy}Wykresy Sepal.Width względem gatunków irysa"}
+
+# Dane do wykresów
+iris_cechy <- merge(iris, cechy, by = "row.names", all = TRUE)
+iris_cechy <- iris_cechy[, -1]  # Usunięcie kolumny 'Row.names'
+
+# Wykresy 
+p5 <- ggplot(iris_cechy, aes(x = Sepal.Width_eqf, fill = Species.x)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(title = "Sepal.Width - Equal Frequency", x = "Przedziały", y = "Liczba", fill = "Gatunek") +
+  scale_fill_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+  theme_minimal()
+
+p6 <- ggplot(iris_cechy, aes(x = Sepal.Width_eqw, fill = Species.x)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(title = "Sepal.Width - Equal Width", x = "Przedziały", y = "Liczba", fill = "Gatunek") +
+  scale_fill_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+  theme_minimal()
+
+p7 <- ggplot(iris_cechy, aes(x = Sepal.Width_kmeans, fill = Species.x)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(title = "Sepal.Width - K-Means", x = "Przedziały", y = "Liczba", fill = "Gatunek") +
+  scale_fill_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+  theme_minimal()
+
+p8 <- ggplot(iris_cechy, aes(x = Sepal.Width_manual, fill = Species.x)) +
+  geom_bar(position = "stack", color = "black") +
+  labs(title = "Sepal.Width - Ręczne przedziały", x = "Przedziały", y = "Liczba", fill = "Gatunek") +
+  scale_fill_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+  theme_minimal()
+
+grid.arrange(p6, p5, p7, p8, nrow = 2)
+
+
+```
+
+Podobnie jak w tabelach, na rysunku \ref{fig:SepalWykresy} widzimy wzorce w rozkładzie gatunków. W metodzie Equal Width pierwszy przedział niemal nie ma setosa, środkowy to mieszanka wszystkich gatunków, a ostatni ma trochę setosa z virginica, prawie bez versicolor. W Equal Frequency pierwszy przedział ma mało setosa, środkowy i ostatni więcej, ale z domieszką versicolor i virginica w środkowym przedziale. W K-Means pierwszy przedział prawie nie zawiera setosa, środkowy to mieszanka z przewagą versicolor i virginica, a ostatni ma więcej setosa przy mniejszej liczbie innych gatunków. W ręcznie ustalonych przedziałach pierwszy ma najmniej setosa, środkowy to mieszanka, a ostatni skupia najwięcej setosa z mniejszą liczbą virginica i odrobiną versicolor.
+
+```{r porownanie_metod_dyskretyzacji_sepal_gatunki_wykresy2, fig.width=8, fig.height=4, message=FALSE, warning=FALSE, echo=FALSE, fig.cap = "\\label{fig:scatter_sepal}Wykresy punktowe Sepal.Width z granicami przedziałów dla różnych metod dyskretyzacji"}
+
+# Funkcja do tworzenia wykresu punktowego z losowym y
+rysuj_scatter_losowe_y <- function(dane, breaks, title) {
+  dane$y <- runif(nrow(dane), min = 0, max = 1)  # losowe wartości y
+  ggplot(dane, aes(x = Sepal.Width, y = y, color = Species)) +
+    geom_point(size = 2) +
+    geom_vline(xintercept = breaks, color = "red", linetype = "dashed", size = 1.2) +
+    labs(title = title, x = "Sepal Width", y = "", color = "Gatunek") +
+    theme_minimal() +
+    scale_color_manual(values = c("setosa" = "lightblue", "versicolor" = "#CCFFCC", "virginica" = "lightpink")) +
+    ylim(0, 1)
+}
+
+# Tworzenie wykresów z losowym y
+plot_eqw <- rysuj_scatter_losowe_y(cechy, breaks_sepal_eqw, "Equal Width")
+plot_eqf <- rysuj_scatter_losowe_y(cechy, breaks_sepal_eqf, "Equal Frequency")
+plot_kmeans <- rysuj_scatter_losowe_y(cechy, breaks_sepal_kmeans, "K-Means")
+plot_manual <- rysuj_scatter_losowe_y(cechy, breaks_sepal_manual, "Ręczne przedziały")
+
+# Wyświetlanie w siatce 2x2
+grid.arrange(plot_eqw, plot_eqf, plot_kmeans, plot_manual, ncol = 2)
+
+```
+
+Rysunek \ref{fig:scatter_sepal} ukazuje wykresy rozrzutu dla Sepal.Width irysów (setosa, versicolor, virginica) z granicami przedziałów dyskretyzacji (czerwone linie) dla metod Equal Width, Equal Frequency, K-Means i ręcznych przedziałów.
+
+Punkty setosa (jasnoniebieskie) w większości metod skupiają się w wyższych wartościach Sepal.Width, głównie w ostatnich przedziałach. W Equal Frequency setosa przeważa w ostatnim przedziale, z domieszką versicolor (zielone) i virginica (różowe). Natomiast w Equal Width w środkowym przedziale wszystkie gatunki są wymieszane, za to w ostatnim przedziale dominuje setosa. W K-Means środkowy przedział pokazuje większe wymieszanie gatunków, ale setosa dominuje w ostatnim. Ręczne przedziały najlepiej wyodrębniają setosa w ostatnim przedziale, z niewielką liczbą innych gatunków. Rozdzielność versicolor i virginica jest we wszystkich metodach ograniczona, co zgadza się z wcześniejszymi wnioskami.
+
+```{r wspolczynniki_zgodnosci_sepal_tabele, message=FALSE, warning=FALSE, echo=FALSE}
+# Obliczanie współczynnika zgodności
+agreement_eqw <- compareMatchedClasses(iris$Species, iris_cechy$Sepal.Width_eqw)$diag
+agreement_eqf <- compareMatchedClasses(iris$Species, iris_cechy$Sepal.Width_eqf)$diag
+agreement_kmeans <- compareMatchedClasses(iris$Species, iris_cechy$Sepal.Width_kmeans)$diag
+agreement_manual <- compareMatchedClasses(iris$Species, iris_cechy$Sepal.Width_manual)$diag
+
+# Tworzenie ramki danych z wynikami (zaokrąglenie do procentów z 2 miejscami)
+agreement_table <- data.frame(
+  Metoda = c("Equal Width", "Equal Frequency", "K-Means", "Ręczne przedziały"),
+  Zgodność = paste0(round(c(agreement_eqw, agreement_eqf, agreement_kmeans, agreement_manual) * 100, 2), "%")
+)
+
+# Wyświetlenie tabeli
+library(knitr)
+kable(agreement_table, caption = "Współczynnik zgodności dla różnych metod dyskretyzacji - Sepal Width \\label{tab:WspolczynnikSepal}")
+```
+Z przeprowadzonych analiz dyskretyzacji cechy `Sepal.Width` różnymi metodami, można sformułować następujące ogólne wnioski dotyczące ich zdolności do separacji trzech odmian irysa.
+
+Warto zauważyć, że żadna z zastosowanych metod dyskretyzacji `Sepal.Width` nie wykazała jednoznacznej skuteczności w izolowaniu jednego z gatunków. W analizie nie zaobserwowano silnej dominacji jednego gatunku w konkretnych przedziałach we wszystkich metodach. Niemniej jednak, można zaobserwować pewną tendencję, gdzie gatunek setosa wykazuje większą liczebność w przedziałach odpowiadających wyższym wartościom Sepal.Width, choć nie jest to dominacja absolutna we wszystkich metodach.
+
+Rozróżnienie między gatunkami versicolor i virginica okazało się problematyczne dla wszystkich zastosowanych metod dyskretyzacji `Sepal.Width`. Tabele i wykresy konsekwentnie ujawniały nakładanie się liczebności tych dwóch gatunków w poszczególnych przedziałach, co utrudniało ich wyraźną separację.
+
+Przyglądając się poszczególnym metodom, Equal Frequency osiągnęła najwyższy współczynnik zgodności wynoszący 54.67% (Tabela \ref{tab:WspolczynnikSepal}), co sugeruje, że podział na przedziały o równej liczebności był najbardziej efektywny w odzwierciedleniu istniejącego podziału na gatunki dla tej cechy. Metoda Equal Width, z najniższym współczynnikiem zgodności na poziomie 40.81%, okazała się najmniej skuteczna w separacji gatunków na podstawie `Sepal.Width`. Metody K-Means (44.5%) i ręcznie ustalone przedziały (48.88%) wykazały pośrednią skuteczność.
+
+Podsumowując, dyskretyzacja `Sepal.Width` nie pozwoliła na jednoznaczne wyodrębnienie żadnego z gatunków irysa. Najlepsze ogólne wyniki w rozróżnianiu wszystkich trzech gatunków osiągnięto przy użyciu metody Equal Frequency, co potwierdza najwyższy współczynnik zgodności. Pozostałe metody wykazały niższą skuteczność, a rozróżnienie między versicolor a virginica pozostało wyzwaniem we wszystkich analizowanych podziałach `Sepal.Width`.
+
+### Podsumowanie
+
+Porównując wyniki dyskretyzacji cech `Sepal.Width` i `Petal.Length` pod kątem ich zdolności do separacji trzech odmian irysa, można zauważyć znaczące różnice w skuteczności.
+
+W przypadku cechy `Sepal.Width`, żadna z zastosowanych metod dyskretyzacji nie pozwoliła na jednoznaczne wyodrębnienie poszczególnych gatunków. Najlepsze ogólne wyniki osiągnięto przy użyciu metody Equal Frequency. Jednak nawet ta metoda nie zapewniła wyraźnej separacji, a rozróżnienie między gatunkami versicolor i virginica okazało się szczególnie problematyczne dla wszystkich analizowanych podziałów.
+
+Z kolei dyskretyzacja cechy `Petal.Length` przyniosła znacznie lepsze rezultaty. Wszystkie zastosowane metody skutecznie wyodrębniły gatunek setosa, który wyraźnie odróżniał się długością płatków od pozostałych dwóch gatunków. Podobnie jak w przypadku `Sepal.Width`, trudność sprawiało rozróżnienie między versicolor a virginica, jednak ogólna skuteczność separacji była znacznie wyższa. Najlepsze wyniki osiągnęła metoda Equal Frequency, co wskazuje na jej dużą efektywność w rozróżnianiu wszystkich trzech gatunków na podstawie długości płatków. Metoda K-Means, mimo dobrej separacji setosy, wypadła nieco gorzej w rozróżnianiu versicolor i virginica. Metody Equal Width i ręcznie ustalone przedziały osiągnęły zbliżone, wysokie wyniki.
+
+# Analiza składowych głównych (Principal Component Analysis (PCA))
+
+## Przygotowanie danych i ich opis
+
+Dane pochodzą z pliku CSV i zawierają informacje o jakości życia w różnych miastach świata, które posłużą do analizy danych (z pliku "uaScoresDataFrame.csv") dostępnego pod linkiem: https://www.kaggle.com/datasets/orhankaramancode/city-quality-of-life-dataset.
+
+
+```{r wczytywanie-danych1}
+#Wczytanie zbioru danych
+danePCA <- read.csv(file="uaScoresDataFrame.csv", stringsAsFactors = TRUE)
+```
+
+
+Zweryfikujmy i spawdźmy z jakimi danymi mamy doczynenia
+
+```{r analiza-klas, echo=FALSE}
+# Typy zmiennych dla danePCA
+
+# Tworzymy ramkę danych z indeksami, nazwami zmiennych i typami
+tz_pca <- data.frame(
+  Indeks = seq_along(names(danePCA)),
+  "Nazwa zmiennej" = names(danePCA),
+  "Typ zmiennej" = sapply(danePCA, class),
+  "Opis zmiennej" = c(
+    "Indeks porządkowy",
+    "Nazwa obszaru miejskiego",
+    "Kraj obszaru miejskiego",
+    "Kontynent obszaru miejskiego",
+    "Wskaźnik  standardu zamieszkania",
+    "Wskaźnik kosztów życia",
+    "Wskaźnik liczby startupów",
+    "Wskaźnik kapitału wysokiego ryzyka",
+    "Wskaźnik łączności podróżniczej",
+    "Wskaźnik dojazdów do pracy",
+    "Wskaźnik swobody działalności gospodarczej",
+    "Wskaźnik bezpieczeństwa",
+    "Wskaźnik opieki zdrowotnej",
+    "Wskaźnik edukacji",
+    "Wskaźnik jakości środowiska",
+    "Wskaźnik ekonomii",
+    "Wskaźnik opodatkowania",
+    "Wskaźnik dostępu do internetu",
+    "Wskaźnik rekreacji i kultury",
+    "Wskaźnik tolerancji",
+    "Wskaźnik aktywności na świeżym powietrzu"
+  ),
+  check.names = FALSE
+)
+
+#Tworzymy dużą tabele
+kable(tz_pca, caption = "Opis danych PCA \\label{tab:OpisDanych}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+
+W zbiorze danych nie występują brakujące wartości (NA),
+Struktura i podstawowe statystyki zmiennych zostały sprawdzone za pomocą str()
+i summary(). Żadne nieprawidłowości w typach danych ani w rozkładzie
+zmiennych nie zostały zidentyfikowane.
+Kolumna `X` zawiera wyłącznie numerację wierszy i nie wnosi istotnych informacji, zatem nie należy brać jej pod uwagę podczas naszej analizy.
+
+
+Metodę PCA można zastosować tylko na zmiennych rodzaju ilościowego, zatem wyodrębmy je (pamiętając o usunięciu kolumny `X`):
+
+```{r dane-iloścowe}
+#Wyodębnienie zmiennych ilościowych
+daneIlosciowe <- danePCA %>%
+  select(-X) %>%  # Usuwanie kolumny 'X'
+  select(where(is.numeric))  # Wybór tylko zmiennych ilościowych
+```
+
+Dodatkowo, aby móc efektownie zastosować metodę PCA musimy stwierdzić czy potrzebna jest standaryzacja naszych danych ilościowych. W tym celu wyliczymy ich wariację oraz porównamy je wizualnie.
+
+```{r wariancje, fig.width=8, fig.height=5, echo=FALSE, fig.cap="\\label{fig:rozrzutprzed}Wizualizacja cech ilościowych"}
+#Wyliczenie wariancji cech ilościowych
+wariancje <- sapply(daneIlosciowe, var)
+
+#Zamieniamy na ramkę danych
+wariancje_df <- data.frame(
+  Cecha = names(wariancje),
+  Wariancja = round(wariancje, 3)
+)
+
+#Wyświetlamy ładną tabelkę
+kable(wariancje_df, caption = "Wariancje cech ilościowych \\label{tab:tabelawariancjiilosciowych}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+#Wykresy pudełkowe wariancji cech ilościowych
+boxplot(daneIlosciowe, main = "Wizualizacja cech ilościowych", las = 2,cex.axis = 0.5, col="lightpink")
+#las - obraca etykiety osi X, aby były czytelne
+```
+Jak widać na Rysunku \ref{fig:rozrzutprzed} oraz Tabeli \ref{tab:tabelawariancjiilosciowych} rozrzut (wariancja) między cechami ilościowymi jest chaotyczny, znacząco zróżnicowany - niektóre cechy mają duży zakres, a inne są mocno skupione wokół środka. Stąd, można stwierdzić, że należy przeprowadzić standaryzację danych. 
+
+```{r standaryzacja-danych, fig.width=8, fig.height=5, echo=FALSE, fig.cap="\\label{fig:rozrzutpo}Wizualizacja cech ilościowych po standaryzacji"}
+#Standaryzacja danych cech ilościowych
+daneStandaryzowane <- scale(daneIlosciowe)
+
+#Wykresy pudełkowe cech ilościowych po standaryzacji 
+boxplot(daneStandaryzowane, main = "Wizualizacja cech ilościowych po standaryzacji", las = 2, cex.axis = 0.5, col="lightpink")
+```
+
+Mając ustandaryzowane dane (jak na Rysunku \ref{fig:rozrzutpo}) możemy przejść do wyzanczania, wyliczania oraz porównywania składowych głównych.
+
+```{r wykresy-składowych, echo=FALSE, fig.width=8, fig.height=5, fig.cap="\\label{fig:rozrzutskladowych}Rozrzut składowych głównych"}
+#Wyniki PCA (scores)
+pca <- prcomp(daneStandaryzowane,
+              center = FALSE,   #już są wycentrowane przez scale()
+              scale. = FALSE)   #już są zeskalowane przez scale()
+
+scores <- pca$x
+
+#Ustawienie układu 1x2
+par(mfrow = c(1, 2))
+
+#Boxplot wszystkich składników
+boxplot(scores,
+        main = "Rozrzut wszystkich składowych",
+        xlab = "Składowa główna",
+        ylab = "Wartość składowej",
+        col  = rainbow(ncol(scores)),
+        names = paste0("PC", 1:ncol(scores)))
+
+#Boxplot dla składników głównych 1-3
+boxplot(scores[,1:3],
+        names = c("PC1","PC2","PC3"),
+        main  = "Rozrzut PC1–PC3",
+        xlab = "Składowa główna",
+        ylab  = "Wartość składowej",
+        col   = c("lightblue","lightgreen","lightpink"))
+
+
+#Przywrócenie układu 1x1
+par(mfrow = c(1,1))
+
+```
+Składowe główne są uporządkowane względem wariancji - PC1 ma charakteryzuje się największym rozrzutem, a PC17 najmniejszym, co jest wyraźnie ukazane na Rysunkach
+\ref{fig:rozrzutskladowych}.
+
+Przyjrzyjmy się głębiej interesującymi nas składowymi głównymi: PC1, PC2, PC3:
+
+```{r analiza-skladowych13, echo=FALSE}
+loadings <- pca$rotation[,1:3]
+loadings_df <- data.frame(
+  Zmienna = rownames(loadings),
+  PC1 = round(loadings[,1], 3),
+  PC2 = round(loadings[,2], 3),
+  PC3 = round(loadings[,3], 3))
+
+#Sześć największych zmiennych do każdego obciążenia
+top_k <- 6   #ile na komponentę
+top_list <- lapply(1:3, function(i) {
+  df <- loadings_df[order(-abs(loadings_df[[i+1]])), c("Zmienna", names(loadings_df)[i+1])]
+  colnames(df) <- c("Zmienna", "Loading")
+  df[1:top_k, ]
+})
+
+for(i in 1:3) {
+  tab <- top_list[[i]]
+  rownames(tab) <- NULL
+  caption_txt <- paste0("Największe obciążenia zmiennych na PC", i,
+    " \\label{tab:tabela", i+1, "}")
+  
+  kable(tab,
+        caption   = caption_txt,
+        col.names = c("Zmienna", "Loading")
+  ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "bordered", "hover"),
+      font_size     = 10
+    ) %>%
+    print()
+}
+```
+
+**PC1**
+
+Pierwsza składowa główna - PC1 (Tabela \ref{tab:tabela2}) wydaje się kontrastować miasta o dobrej sytuacji mieszkaniowej z tymi, które charakteryzują się wyższym poziomem rozwoju społeczno-ekonomicznego w innych obszarach. Wysokie wartości na PC1 wskazują na miasta, gdzie dostępność i warunki mieszkaniowe są relatywnie lepsze, ale może to iść w parze z niższymi wskaźnikami w edukacji, swobodzie gospodarczej, jakości środowiska, opiece zdrowotnej i dostępie do internetu. Z kolei niskie wartości PC1 sugerują miasta z gorszą sytuacją mieszkaniową, ale potencjalnie silniejszymi wynikami w wymienionych aspektach rozwoju. 
+
+**PC2**
+
+Druga składowa główna - PC2 (Tabela \ref{tab:tabela3} ogólnie odróżnia miasta o wyższym poziomie kapitału społecznego i jakości życia od tych z silniejszym ekosystemem innowacji i kultury. Wysokie wartości PC2 wskazują na miasta z większą tolerancją, bezpieczeństwem i lepszą jakością środowiska, ale potencjalnie z mniejszą aktywnością startupową i uboższą ofertą czasu wolnego o charakterze komercyjnym. Natomiast niskie wartości PC2 sugerują miasta z dynamicznym środowiskiem startupów, bogatą ofertą kulturalną i rozrywkową, ale mogą borykać się z niższym poziomem tolerancji, bezpieczeństwa i gorszą jakością środowiska.
+
+
+**PC3**
+Trzecia składowa główna - PC3 (Tabela\ref{tab:tabela4} zdaje się przeciwstawiać miasta z silną kondycją ekonomiczną tym, które oferują lepszą jakość życia pod względem codziennych doświadczeń i kosztów. Wysokie wartości na PC3 wskazują na miasta z dynamiczną gospodarką, ale mogą wiązać się z dłuższymi dojazdami, gorszą komunikacją zewnętrzną, niższym poziomem bezpieczeństwa, wyższymi kosztami życia i trudniejszą sytuacją mieszkaniową. Z kolei niskie wartości PC3 sugerują miasta o potencjalnie słabszej gospodarce, lecz z krótszymi dojazdami, lepszą łącznością, wyższym bezpieczeństwem, niższymi kosztami utrzymania i lepszym rynkiem mieszkaniowym.
+
+
+## Zmienność odpowiadająca poszczególnym składowym
+
+Zbadajmy teraz, jaki procent wyjaśnionej wariancji (zmienności) odpowiada poszczególnym składowym.
+
+
+```{r m, echo=FALSE}
+wariancja <- pca$sdev^2
+proporcja_war <- wariancja / sum(wariancja)
+skumulowany_udzial <- cumsum(proporcja_war)     #skumulowany udział
+
+#Przygotowanie tabeli
+tabela_udzial <- data.frame(
+  Skladowa = paste0("PC", 1:length(proporcja_war)),
+  Udzial = round(proporcja_war * 100, 2),
+  Skumulowany = round(skumulowany_udzial * 100, 2))
+
+kable(tabela_udzial, caption = "Udział wariancji wyjaśnionej przez składniki główne \\label{tab:wariancjeskladnikowe}")
+```
+
+```{r ladnyscreeplot, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:screeplotyskladowych}Udział jednostkowy i skumulowany wariancji dla składowych głównych (%)"}
+#Ustawienie układu graficznego: dwa wykresy obok siebie
+par(mfrow = c(1, 2), mar = c(5, 4, 4, 2) + 0.1)
+
+#Scree Plot z lepiej widocznymi etykietami
+bp <- barplot(proporcja_war * 100,  #Procenty
+              main = "Udział wariancji",
+              xlab = "Składowa główna",
+              ylab = "Proporcja wariancji (%)",
+              names.arg = paste0("PC", 1:length(proporcja_war)),  #Etykiety 
+              col = "darkblue",
+              ylim = c(0, max(proporcja_war * 100) * 1.3))
+
+#Dodanie wartości procentowych nad kolumnami
+text(x = bp,  #Pozycja X (środek kolumn)
+     y = proporcja_war * 100 + 1.5,  #Pozycja Y (nieco nad kolumnami)
+     labels = paste0(round(proporcja_war * 100, 1), "%"),  #Zaokrąglone wartości procentowe
+     pos = 3,  
+     col = "black", 
+     cex = 0.5)  
+
+#Wykres skumulowanego udziału w formie kolumn
+bp_cum <- barplot(skumulowany_udzial * 100,  # Procenty
+                  main = "Skumulowany udział wariancji",
+                  xlab = "Składowa główna",
+                  ylab = "Skumulowany udział (%)",
+                  names.arg = paste0("PC", 1:length(skumulowany_udzial)), 
+                  col = "lightblue",  
+                  ylim = c(0, 110))  
+
+#Dodanie linii dla 80% i 90%
+abline(h = 80, col = "red", lty = "dashed", lwd = 2)
+abline(h = 90, col = "green", lty = "dashed", lwd = 2)
+
+#Etykiety dla 80% i 90% na osi Y
+text(x = 0.5, y = 80 + 5, labels = "80%", col = "red", pos = 4, font = 2)
+text(x = 0.5, y = 90 + 5, labels = "90%", col = "green", pos = 4, font = 2)
+
+#Resetowanie układu graficznego
+par(mfrow = c(1, 1))
+```
+```{r zmiennosc-poszczegolnych-skladowych, echo=FALSE}
+#Tabela dla 90 i 80 procent udziału składowych)
+ile_dla_80 <- which(skumulowany_udzial >= 0.80)[1]
+ile_dla_90 <- which(skumulowany_udzial >= 0.90)[1]
+```
+
+Jak możemy wywnioskować z Rysunków \ref{fig:screeplotyskladowych} oraz Tabeli \ref{tab:wariancjeskladnikowe} większość zmienności danych można wyjaśnić za pomocą niewielkiej liczby składowych. Już wcześniej przebadane 3 pierwsze składowe stanowią ponad połowę (bo 57,21%) całkowitej wariancji.
+
+Liczba składowych potrzebna do wyjaśnienia 80% zmienności to `r ile_dla_80`. 
+Liczba składowych potrzebna do wyjaśnienia 90% zmienności to `r ile_dla_90`.
+
+```{r analiza-skladowych-skrocone, fig.width=10, fig.height=6, echo=FALSE, fig.cap="\\label{fig:rozrzutmiast}Rozrzut miast względem skladowych"}
+#Przygotowanie danych
+pca_df1 <- as.data.frame(pca$x) %>%
+  mutate(
+    Miasto = as.character(danePCA$UA_Name),  # Upewnij się, że to jest tekst
+    Kontynent = danePCA$UA_Continent,
+    SkroconaNazwa = substr(Miasto, 1, 2)
+  )
+
+#Oblicz odległość od środka (dla PCA PC1-PC2)
+pca_df1 <- pca_df1 %>%
+  mutate(distance = sqrt(PC1^2 + PC2^2))
+
+# 3. Wybierz top 10 najbardziej oddalonych miast
+top_n <- 20
+top_miasta <- pca_df1 %>%
+  arrange(desc(distance)) %>%
+  slice_head(n = top_n)
+
+#Dodaj kolumnę 'highlight' z pełną nazwą tylko dla wybranych
+pca_df1 <- pca_df1 %>%
+  mutate(highlight = ifelse(Miasto %in% top_miasta$Miasto, Miasto, NA))
+
+#Wykres
+ggplot(pca_df1, aes(x = PC1, y = PC2, color = Kontynent)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_text(aes(label = SkroconaNazwa), vjust = -1, hjust = 0.5, size = 2.5) +
+  geom_text_repel(
+    aes(label = highlight),
+    size = 4,
+    min.segment.length = 0,
+    seed = 42,
+    box.padding = 0.5,
+    na.rm = TRUE,
+    arrow = arrow(length = unit(0.010, "npc")),
+    nudge_x = 0.15,
+    nudge_y = 0.5,
+    color = "grey30"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Wykres rozrzutu miast względem PC1 i PC2",
+    x = "Pierwsza składowa główna (PC1)",
+    y = "Druga składowa główna (PC2)",
+    color = "Kontynent"
+  )
+
+```
+Rysunek \ref{fig:rozrzutmiast} przedstawia rozrzut miast w przestrzeni dwóch pierwszych (o największej zmienności) składowych głównych PC1 (oś X) i PC2 (oś Y), reprezentujących dwa główne kierunki zmienności w analizowanych danych.
+
+Miasta zaznaczone strzałkami to miasta najabardziej oddalone od pozostałej większości miast.
+
+Havana (Kuba): Położona w prawym górnym kwadrancie (wysokie PC1, wysokie PC2), sugeruje dobrą sytuację mieszkaniową, wysoki poziom tolerancji i bezpieczeństwa oraz dobrą jakość środowiska. Jednakże, może to iść w parze z niższym poziomem edukacji, mniejszą swobodą gospodarczą, słabszą opieką zdrowotną, gorszym dostępem do internetu, mniejszą aktywnością startupową i uboższą ofertą czasu wolnego. Sytuacja polityczno-gospodarcza Kuby może tłumaczyć ograniczenia w gospodarce i technologii, przy jednoczesnych silnych więziach społecznych i unikalnej kulturze. Jakość środowiska i bezpieczeństwo mogą być relatywnie wysokie.
+
+Caracas (Wenezuela): W prawym środkowym obszarze (wysokie PC1, lekko ujemne PC2), wskazuje na dobrą sytuację mieszkaniową (z zastrzeżeniami co do kryzysu), niższy poziom tolerancji, bezpieczeństwa i jakości środowiska, ale potencjalnie wyższą aktywność startupową i bogatszą ofertę czasu wolnego. Interpretacja wymaga ostrożności ze względu na trudną sytuację w kraju.
+
+Mumbai i Bengaluru (Indie): W dolnej prawej części (wysokie PC1, niskie PC2), sugerują dobrą sytuację mieszkaniową, niski poziom tolerancji, bezpieczeństwa i jakości środowiska, ale wysoką aktywność startupową, dostępność kapitału i bogatą ofertę czasu wolnego, szczególnie w technologicznym Bengaluru. Mumbai jako centrum finansowe również wykazuje te cechy. Podobnie Delhi (Indie) w tym samym obszarze, charakteryzuje się dobrą sytuacją mieszkaniową, niższym poziomem tolerancji i środowiska, lecz dynamicznym środowiskiem startupowym i kulturalnym.
+
+Singapur: Położony nisko i lekko na lewo (niskie PC1, niskie PC2), sugeruje relatywnie gorszą sytuację mieszkaniową, ale wyższy poziom edukacji, swobody gospodarczej, opieki zdrowotnej i dostępu do internetu. Niska wartość PC2 wskazuje na niższy poziom tolerancji i bezpieczeństwa oraz jakość środowiska, ale wysoką aktywność startupową i bogatą ofertę kulturalną. Wysokie koszty życia i nieruchomości w Singapurze kontrastują z doskonałą edukacją i gospodarką opartą na innowacjach.
+
+Paryż (Francja): W lewym dolnym kwadrancie (niskie PC1, niskie PC2), wskazuje na gorszą sytuację mieszkaniową (choć lepszą niż Singapur), wysoki poziom edukacji, swobody gospodarczej i opieki zdrowotnej. Podobnie jak Singapur, niska wartość PC2 sugeruje niższy poziom tolerancji i środowiska, ale wysoką aktywność startupową i bogatą kulturę. Wysokie ceny nieruchomości w Paryżu idą w parze z silną gospodarką i bogatym życiem kulturalnym.
+
+Los Angeles (USA): W lewym dolnym rogu (niskie PC1, bardzo niskie PC2), sugeruje znacząco gorszą sytuację mieszkaniową, ale wysoki poziom edukacji, swobody gospodarczej i opieki zdrowotnej. Bardzo niska wartość PC2 wskazuje na niski poziom tolerancji i środowiska, ale bardzo wysoką aktywność startupową i ofertę kulturalną. Wysokie koszty nieruchomości i problemy społeczne w Los Angeles kontrastują z dynamiczną gospodarką i przemysłem rozrywkowym.
+
+## Analiza korelacji
+
+Zacznijmy od przeanalizowania macierzy korelacji, aby później porównać wnioski z dwuwykresem.
+```{r macierz-korelacji, echo=FALSE, fig.width=6, fig.height=4, fig.cap="\\label{fig:macierzkorelacji}Macierz korelacji zmiennych"}
+# Obliczanie macierzy korelacji
+cor_matrix <- cor(daneIlosciowe)
+
+# Wersja graficzna: biblioteka corrplot
+library(corrplot)
+corrplot(cor_matrix, method = "color", type = "full", order = "hclust",
+         tl.cex = 0.6, tl.col = "black", col = colorRampPalette(c("lightpink", "white", "darkblue"))(200))
+
+```
+
+Analiza korelacji między cechami miast przedstawiona na wykresie ujawnia kilka istotnych zależności. Wysoki standard mieszkaniowy wiąże się z wyższymi kosztami życia, ale jednocześnie z niższym poziomem edukacji i gorszą kondycją ekonomiczną. Z kolei wysokie koszty życia idą w parze z niższą jakością środowiska.
+
+Środowisko sprzyjające powstawaniu startupów jest silnie powiązane z dostępnością kapitału inwestycyjnego i w mniejszym stopniu z bogatą ofertą kulturalno-rozrywkową. Kapitał wysokiego ryzyka wykazuje również lekką pozytywną korelację z poziomem wykształcenia mieszkańców.
+
+Komunikacja miejska koreluje słabo dodatnio z dostępem do opieki zdrowotnej i poziomem edukacji, podobnie jak dojazdy do pracy i opieka zdrowotna. Wolność prowadzenia działalności gospodarczej silnie koreluje z lepszą opieką zdrowotną, wyższym poziomem edukacji, lepszą jakością środowiska i dobrą kondycją ekonomiczną, natomiast słabiej i negatywnie z cenami mieszkań. Bezpieczeństwo wydaje się być powiązane z tolerancją.
+
+Opieka zdrowotna jest dodatnio skorelowana z poziomem edukacji i jakością środowiska. Interesującym jest fakt, że wyższy poziom wykształcenia wiąże się z niższą jakością środowiska, słabszą gospodarką i mniejszym dostępem do internetu. Kondycja ekonomiczna nie wykazuje znaczących korelacji poza wspomnianymi. Opodatkowanie nie jest silnie powiązane z innymi zmiennymi, choć zauważalna jest lekka korelacja z bezpieczeństwem. Dostęp do internetu, oprócz negatywnej korelacji z edukacją, pozytywnie koreluje z wolnością gospodarczą i w mniejszym stopniu z jakością środowiska. Oferta kulturalno-rozrywkowa jest słabo powiązana jedynie ze zmienną dotyczącą startupów. Tolerancja silnie koreluje z jakością środowiska i opieką zdrowotną. Aktywności na świeżym powietrzu wykazują słabe powiązania ze startupami, ofertą kulturalno-rozrywkową i kapitałem venture.
+
+
+```{r extrabilot, echo=FALSE ,fig.width=10, fig.height=6, fig.cap="\\label{fig:biplot1}PC1 vs PC2 wg kontynentu"}
+
+fviz_pca_biplot(pca,
+                label = "var",      # pokazuj tylko zmienne
+                habillage = danePCA$UA_Continent, # kolor wg kontynentu
+                addEllipses = TRUE,
+                col.var = "black",
+                repel = TRUE) +
+  ggtitle("Biplot: PC1 vs PC2 wg kontynentu")
+```
+
+Z Rysunku \ref{fig:biplot1} możemy wywnioskować, że miasta z poszczególnych kontynentów tworzą wyraźne grupy, co potwierdza istnienie podobieństw oraz różnic wewnątrz regionów, kontynentów.
+
+Dwuwykres głównych składowych (PC1 i PC2), wyjaśniający łącznie 45% wariancji, prezentuje rozkład miast oraz wpływ poszczególnych zmiennych. Długie, zbliżone wektory zmiennych takich jak edukacja, wolność gospodarcza, jakość środowiska i opieka zdrowotna wskazują na ich silną, pozytywną korelację i sugerują wspólny czynnik rozwoju społeczno-ekonomicznego, który znacząco kształtuje PC1. Koszty życia znajdują się po przeciwnej stronie, co implikuje ich negatywny związek z tymi wskaźnikami.
+
+Startup-y, kapitał wysokiego ryzyka oraz kultura tworzą odrębną grupę, wykazując silną korelację między sobą, ale słabszą z innymi zmiennymi społecznymi, co może odzwierciedlać niezależny wymiar przedsiębiorczości i aktywności miejskiej. Bezpieczeństwo jest powiązane z Tolerancją i Opeką Zdrowotną. Prostopadłe ustawienie wektorów, np. opodatkowania względem edukacji i startup-ów, sugeruje brak silnej korelacji. Długość wektorów wskazuje, że edukacja i wolność gospodarcza są lepiej reprezentowane w przestrzeni PC1 i PC2 niż opodatkowanie czy aktywności na świeżym powietrzu.
+
+Analiza rozmieszczenia kontynentów ujawnia, że miasta Europy, Oceanii i Ameryki Północnej charakteryzują się wyższymi wartościami zmiennych społeczno-gospodarczych. Miasta Afryki i część Azji są bliżej zmiennych związanych z mieszkaniami i kosztami życia. Miasta Ameryki Południowej grupują się w obszarze wysokich kosztów życia, cen mieszkań i opodatkowania, będąc jednocześnie oddalone od zmiennych takich jak edukacja, jakość środowiska czy wolność gospodarcza, co sugeruje odmienne priorytety lub wyzwania rozwojowe w tych regionach. Ogólnie, położenie kontynentów wskazuje na wyższy poziom rozwoju społecznego i infrastrukturalnego w Europie, Ameryce Północnej i Oceanii, w przeciwieństwie do części miast azjatyckich, południowoamerykańskich i afrykańskich, które mogą skupiać się na innych aspektach rozwoju.
+
+Zarówno dwuwykres, jak i macierz korelacji dostarczają komplementarnych wniosków. Dwuwykres oferuje intuicyjną wizualizację struktury zależności, podczas gdy analiza korelacji zapewnia precyzyjne, liczbowe oceny powiązań między zmiennymi, tworząc razem pełniejszy obraz analizowanych danych.
+
+## Wnioski końcowe
+
+Przeprowadzona w dokumencie analiza Principal Component Analysis (PCA) dostarczyła szeregu istotnych wniosków dotyczących struktury danych opisujących jakość życia w różnych miastach świata. Analiza ta pozwoliła na zredukowanie złożoności danych poprzez identyfikację głównych składowych, które w efektywny sposób wyjaśniają większość zaobserwowanej zmienności.
+
+Jednym z kluczowych rezultatów analizy jest ujawnienie złożonych relacji między różnymi wskaźnikami jakości życia. Na przykład, zaobserwowano, że wysoki standard mieszkaniowy jest często powiązany z wyższymi kosztami życia, co jest zgodne z intuicją ekonomiczną. Jednakże, co ciekawe, może on również korelować z niższym poziomem edukacji i gorszą kondycją ekonomiczną, co sugeruje potencjalne nierówności społeczne. Z kolei środowisko sprzyjające rozwojowi startupów wykazuje silne powiązanie z dostępnością kapitału wysokiego ryzyka, co podkreśla kluczową rolę inwestycji w innowacyjność miejską.
+
+Analiza PCA umożliwiła również identyfikację charakterystycznych profilów miast z różnych kontynentów. Miasta europejskie, zlokalizowane w Oceanii i Ameryce Północnej, generalnie charakteryzują się wyższymi wartościami wskaźników społeczno-gospodarczych, co wskazuje na ich relatywnie wysoki poziom rozwoju. Natomiast miasta afrykańskie i część azjatyckich często wykazują większy nacisk na wskaźniki związane z mieszkaniami i kosztami życia, co może odzwierciedlać odmienne priorytety rozwojowe lub wyzwania, z którymi się te regiony mierzą. Miasta Ameryki Południowej wyróżniają się skupieniem na wysokich kosztach życia, cenach mieszkań i opodatkowaniu, przy jednoczesnym oddaleniu od zmiennych takich jak edukacja czy jakość środowiska, co sugeruje specyficzne uwarunkowania ekonomiczne i społeczne tego regionu.
+
+Kluczowym aspektem metodologicznym analizy PCA była konieczność standaryzacji danych. Zróżnicowany rozrzut i wariancja między analizowanymi cechami ilościowymi wymusiły zastosowanie tej procedury, aby zapewnić, że każda zmienna wnosi równy wkład do analizy. Standaryzacja umożliwiła obiektywne porównanie zmiennych o różnych skalach i jednostkach, co jest fundamentalne dla poprawnego działania PCA i interpretacji uzyskanych wyników.
+
+# Skalowanie wielowymiarowe
+
+##  Dane: `titanic_train`
+
+Zbiór danych `titanic_train` zawiera informacje o 891 pasażerach Titanica i składa się z 12 zmiennych opisujących zarówno cechy demograficzne pasażerów, jak i szczegóły ich podróży.
+
+W Tabeli \ref{tab:tabela_titanic} przedstawiono szczegółowe informacje na temat zmiennych zawartych w zbiorze danych. Każdemu pasażerowi przypisany jest unikalny identyfikator (`PassengerId`), a zmienna `Survived` wskazuje, czy dana osoba przeżyła czy zginęła. `Pclass` oznacza klasę biletu pasażera i może przyjmować wartości od 1 do 3, gdzie 1 oznacza najwyższą klasę.
+
+W zbiorze znajdują się również dane takie jak imię i nazwisko pasażera (`Name`), jego płeć (`Sex`), wiek (`Age`), liczba towarzyszących krewnych – rodzeństwa i małżonków (`SibSp`), a także rodziców i dzieci (`Parch`). Inne zmienne to numer biletu (`Ticket`), opłata za bilet (`Fare`), numer kabiny (`Cabin`) oraz port zaokrętowania (`Embarked`), który może przyjmować jedną z trzech wartości: C (Cherbourg), Q (Queenstown) lub S (Southampton).
+
+W zbiorze występują braki danych przedstawione w Tabeli \ref{tab:BrakiTitanic}. Najwięcej braków dotyczy zmiennej `Cabin` – 687 przypadków, co stanowi 77.10% danych. Taka skala braków najprawdopodobniej wynika z faktu, że dokładna informacja o numerze kabiny była przypisywana głównie pasażerom podróżującym w pierwszej klasie. Zmienna `Age` ma 177 braków, czyli 19.87% obserwacji, braki mogą być spowodowane trudnościami w rejestracji dokładnego wieku niektórych pasażerów, zwłaszcza dzieci. Najmniej braków występuje w zmiennej `Embarked` – tylko 2 przypadki, czyli 0.22%, co stanowi znikomy odsetek danych, prawdopodobnie wynikają one z przeoczenia podczas wprowadzania danych lub niejednoznacznych informacji w pierwotnej dokumentacji.
+
+```{r dane_titanic, message=FALSE, warning=FALSE, echo=FALSE}
+# Wczytanie danych
+data("titanic_train")
+titanic <- titanic_train
+
+# Tworzymy ramkę danych z informacjami o zmiennych
+tz <- data.frame(
+  Indeks = seq_along(names(titanic)),
+  "Nazwa zmiennej" = names(titanic),
+  "Typ zmiennej" = sapply(titanic, class),
+  "Opis zmiennej" = c(
+    "Unikalny identyfikator pasażera",
+    "Czy pasażer przeżył (0 = nie, 1 = tak)",
+    "Klasa biletu (1 = 1 klasa, 2 = 2 klasa, 3 = 3 klasa)",
+    "Nazwisko pasażera",
+    "Płeć pasażera",
+    "Wiek w latach (wartość ułamkowa dla dzieci poniżej 1 roku)",
+    "Liczba rodzeństwa / małżonków na pokładzie",
+    "Liczba rodziców / dzieci na pokładzie",
+    "Numer biletu",
+    "Opłata za bilet",
+    "Numer kabiny",
+    "Port zaokrętowania (C = Cherbourg, Q = Queenstown, S = Southampton)"
+  ),
+  check.names = FALSE
+)
+
+# Tworzymy tabelę
+kable(tz, caption = "Typy zmiennych w zbiorze titanic_train \\label{tab:tabela_titanic}", 
+      row.names = FALSE, format = "latex", booktabs = TRUE) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover"),
+    latex_options = c("hold_position", "scale_down"),
+    font_size = 12
+  ) %>%
+  column_spec(4, width = "10cm") # Zawijanie tekstu w kolumnie "Opis zmiennej"
+
+# Liczba przypadków (wierszy) i cech (kolumn)
+#dim(titanic)
+```
+```{r dane_titanic_braki, message=FALSE, warning=FALSE, echo=FALSE}
+
+# Przygotowanie danych o brakach
+# Sprawdzamy dane puste, ze spacją oraz gdzie występuje NULL
+braki_kolumny <- colSums(is.na(titanic)) + 
+                colSums(titanic == "", na.rm = TRUE) +
+                colSums(titanic == " ", na.rm = TRUE) +
+                colSums(titanic == "NULL", na.rm = TRUE)
+
+# Tworzenie ramki danych tylko dla kolumn z brakami
+braki_tabela <- data.frame(
+  "Kolumna" = names(braki_kolumny[braki_kolumny > 0]),
+  "Liczba braków" = braki_kolumny[braki_kolumny > 0],
+  "Procent braków" = round(braki_kolumny[braki_kolumny > 0] / nrow(titanic) * 100, 2),
+  check.names = FALSE
+)
+
+# Generowanie tabeli z podsumowaniem
+kable(braki_tabela, 
+      caption = "Braki danych w zmiennych \\label{tab:BrakiTitanic}",
+      align = c('l', 'c', 'c'),
+      col.names = c("Zmienna", "Liczba braków", "Procent braków"), 
+      row.names = FALSE, 
+      format = "latex", 
+      booktabs = TRUE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                latex_options = c("hold_position"),
+                full_width = FALSE)
+
+```
+
+Na początku zbiór danych zawierał 12 zmiennych, z czego kilka pełniło jedynie rolę identyfikacyjną i nie wnosiło istotnych informacji do analizy. Dlatego zostały usunięte, aby uprościć dane.
+
+Następnie sprawdzono, czy typy zmiennych są odpowiednie. Okazało się, że nie wszystkie były dobrze przypisane, więc dokonano kilku konwersji. Zmienna Survived została zmieniona na typ factor, ponieważ opisuje kategorię: czy pasażer przeżył (0 = nie, 1 = tak). Pclass, mimo że zapisana jako liczba, tak naprawdę oznaczała klasy biletowe i miała naturalny porządek (1, 2, 3), więc zmieniono ją na ordered factor.
+
+Sex zawierał informacje o płci (male, female) i również został zmieniony na factor, podobnie jak Embarked, który wskazuje port zaokrętowania i ma trzy możliwe wartości (C, Q, S).
+
+Pozostałe zmienne, takie jak Age, SibSp, Parch i Fare, zostały bez zmian, ponieważ już wcześniej miały odpowiedni typ numeryczny.
+
+Po tych zmianach zbiór danych zawiera 891 wierszy i 8 kolumn, a wszystkie zmienne mają teraz poprawnie przypisane typy.  Zmienione dane zostały przedstawione w Tabeli \ref{tab:}
+
+
+```{r dane_titanic_aktualizacja, message=FALSE, warning=FALSE, echo=FALSE}
+# Konwersja zmiennych na odpowiednie typy
+titanic$Survived <- as.factor(titanic$Survived)
+titanic$Pclass <- as.ordered(titanic$Pclass)
+titanic$Sex <- as.factor(titanic$Sex)
+titanic$Embarked <- as.factor(titanic$Embarked)
+
+# Usunięcie kolumn identyfikujących pasażerów
+titanic <- titanic[, !(names(titanic) %in% c("PassengerId", "Name", "Ticket", "Cabin"))]
+
+# Nowa tabela tylko dla zmiennych z titanic
+tz_cleaned <- data.frame(
+  Indeks = seq_along(names(titanic)),
+  "Nazwa zmiennej" = names(titanic),
+  "Typ zmiennej" = sapply(titanic, function(x) paste(class(x), collapse = ", ")),
+  "Opis zmiennej" = c(
+    "Czy pasażer przeżył (0 = nie, 1 = tak)",
+    "Klasa biletu (1 = 1 klasa, 2 = 2 klasa, 3 = 3 klasa)",
+    "Płeć pasażera",
+    "Wiek w latach (wartość ułamkowa dla dzieci poniżej 1 roku)",
+    "Liczba rodzeństwa / małżonków na pokładzie",
+    "Liczba rodziców / dzieci na pokładzie",
+    "Opłata za bilet",
+    "Port zaokrętowania (C = Cherbourg, Q = Queenstown, S = Southampton)"
+  ),
+  check.names = FALSE
+)
+
+# Wyświetlenie tabeli
+kable(tz_cleaned, caption = "Zmiennie po zmianach zbioru danych \\label{tab:tabela_titanic_aktu}", 
+      row.names = FALSE, format = "latex", booktabs = TRUE) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "bordered", "hover"),
+    latex_options = c("hold_position", "scale_down"),
+    font_size = 12
+  ) %>%
+  column_spec(4, width = "10cm")
+
+# Liczba przypadków (wierszy) i cech (kolumn) po zmianach
+#dim(titanic)
+
+```
+JAKI DIM PO ZMIANACH
+
+## Redukcja wymiaru na bazie MDS
+
+```{r redukcja_wymiaru, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:ShepardTitanic}Diagram Sheparda dla danych z Titanica (d = 2)"}
+# Obliczanie macierzy bez kolumny "Survived"
+data.mds <- subset(titanic, select=-1)
+dissimilarities <- daisy(data.mds, stand = TRUE)
+
+# MDS
+mds_result <- cmdscale(dissimilarities, k = 2)
+
+# Macierze 
+dis_matrix <- as.matrix(dissimilarities)
+dist_mds <- dist(mds_result)
+dist_mds_matrix <- as.matrix(dist_mds)
+
+# STRESS
+STRESS <- sum((dis_matrix - dist_mds_matrix)^2)
+
+# Przygotowanie danych do wykresu Sheparda
+original_dists <- dis_matrix[upper.tri(dis_matrix)]
+mds_dists <- dist_mds_matrix[upper.tri(dist_mds_matrix)]
+
+df_shepard <- data.frame(
+  Oryginalny = original_dists,
+  PoMDS = mds_dists
+)
+
+# Diagram Sheparda
+ggplot(df_shepard, aes(x = Oryginalny, y = PoMDS)) +
+  geom_point(color = "lightpink", shape = 1, size = 1) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", linewidth = 1) +
+  labs(
+    title = "Diagram Sheparda dla danych z Titanica (d = 2)",
+    x = "Oryginalny dystans (Gowera)",
+    y = "Dystans po MDS"
+  ) +
+  theme_minimal() +
+  annotate("text", x = 0.05, y = max(df_shepard$PoMDS), 
+           label = paste("STRESS =", round(STRESS, 4)), 
+           hjust = 0, size = 4, fontface = "italic", bg = "lightgray")
+
+```
+
+Diagram Sheparda (Rysunek \ref{fig:ShepardTitanic}), służy do oceny, jak dobrze dwuwymiarowa reprezentacja danych (uzyskana metodą MDS) odzwierciedla oryginalne odległości między obiektami.
+
+Każdy punkt na wykresie przedstawia parę obiektów z danych Titanica. Oś pozioma pokazuje oryginalną odległość między tymi obiektami, a oś pionowa pokazuje odległość między tymi samymi obiektami po zastosowaniu algorytmu MDS i umieszczeniu ich w przestrzeni dwuwymiarowej.
+
+Idealnie, wszystkie punkty powinny leżeć blisko czerwonej, przerywanej linii prostej, która reprezentuje doskonałą zgodność między oryginalnymi a zredukowanymi wymiarowo odległościami. Rozproszenie punktów wokół tej linii wskazuje na pewną utratę informacji podczas redukcji wymiarowości.
+
+Wartość STRESS, jest miarą niedopasowania – im niższa wartość STRESS, tym lepsze dopasowanie. Wysoka wartość STRESS sugeruje, że dwuwymiarowa reprezentacja nie oddaje wiernie oryginalnych relacji między danymi. W tym przypadku, duża wartość STRESS wskazuje na dość słabe dopasowanie, co widać również po znacznym rozproszeniu punktów na wykresie.
+
+## Wizualizacja danych
+
+```{r wizualizacja_danych1, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:MDSsurvived}Wizualizacja MDS dla danych z Titanica z podziałem na Survived"}
+# Tworzenie ramki danych do wykresu
+mds_2d_df <- as.data.frame(mds_result)
+colnames(mds_2d_df) <- c("V1", "V2")
+mds_2d_df$Survived <- as.factor(titanic$Survived)
+
+# Wykres
+ggplot(mds_2d_df, aes(x = V1, y = V2, color = Survived)) +
+  geom_point(alpha = 0.8, size = 2) +
+  labs(title = "MDS według Survived",
+       x = "Wymiar 1", y = "Wymiar 2") +
+  theme_minimal() +
+  scale_color_manual(values = c("lightpink", "#CCFFCC"),
+                     labels = c("Nie przeżył", "Przeżył")) +
+  theme(legend.title = element_blank())
+```
+
+Na Rysunku \ref{fig:MDSsurvived} każda kropka to pasażer Titanica, a ich bliskość pokazuje podobieństwo między nimi pod względem różnych cech. Kolor kropki wskazuje, czy ktoś przeżył (zielony) czy nie (różowy). Chociaż nie ma idealnego podziału na zielone i różowe obszary, widać pewne skupiska kropek w podobnych kolorach. To sugeruje, że pasażerowie o podobnych cechach mieli tendencję do podobnego losu. Czasami widzimy pojedyncze kropki daleko od innych w tym samym kolorze. To mogą być pasażerowie, którzy byli nietypowi pod względem swoich cech. Widać, że chociaż pewne cechy pasażerów miały znaczenie dla przeżycia, nie da się na podstawie Rysunku \ref{fig:MDSsurvived} jednoznacznie stwierdzić, kto przeżył, a kto nie. Grupy przeżyłych i nieprzeżyłych pasażerów częściowo się mieszają, co oznacza, że wiele czynników mogło wpływać na los pasażera.
+
+```{r wizualizacja_danych2, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:MDSsex}Wizualizacja MDS dla danych z Titanica z podziałem na płeć"}
+# Dodanie zmiennej Sex do ramki danych MDS
+mds_2d_df$Sex <- as.factor(titanic$Sex)
+
+# Wykres
+ggplot(mds_2d_df, aes(x = V1, y = V2, color = Sex)) +
+  geom_point(alpha = 0.7, size = 2) +
+  labs(title = "MDS według płci",
+       x = "Wymiar 1", y = "Wymiar 2") +
+  theme_minimal() +
+  scale_color_manual(values = c("lightpink", "lightblue"),
+                     labels = c("kobieta", "mężczyzna")) +
+  theme(legend.title = element_blank())
+```
+
+Analizując Rysunek \ref{fig:MDSsex}, gdzie położenie kropek reprezentuje podobieństwo pasażerów Titanica, kolor kropek odzwierciedla ich płeć (różowy dla kobiet, niebieski dla mężczyzn). W przeciwieństwie do wykresu pokazującego przeżycie, tutaj widzimy wyraźne dwa odrębne skupiska. Skupisko po lewej stronie jest zdominowane przez różowe kropki, reprezentujące kobiety, a skupisko po prawej stronie składa się głównie z niebieskich kropek, oznaczających mężczyzn. To silne rozdzielenie sugeruje, że płeć była kluczową cechą różnicującą populację pasażerów Titanica pod względem analizowanych charakterystyk. Ta wizualizacja silnie podkreśla płeć jako istotną zmienną w kontekście danych pasażerów Titanica.
+
+```{r wizualizacja_danych3, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:MDSpclass}Wizualizacja MDS dla danych z Titanica z podziałem na Pclass"}
+# Dodanie zmiennej Pclass do ramki danych MDS
+mds_2d_df$Pclass <- as.factor(titanic$Pclass)
+
+# Wykres
+ggplot(mds_2d_df, aes(x = V1, y = V2, color = Pclass)) +
+  geom_point(alpha = 0.7, size = 2) +
+  labs(title = "MDS według Pclass",
+       x = "Wymiar 1", y = "Wymiar 2") +
+  theme_minimal() +
+  scale_color_manual(values = c("#CCFFCC", "lightblue", "lightpink"),
+                     labels = c("1 klasa", "2 klasa", "3 klasa")) +
+  theme(legend.title = element_blank())
+
+```
+
+Na Rysunku \ref{fig:MDSpclass} obserwujemy bardziej złożony wzór grupowania niż w przypadku płci. Można dostrzec pewne tendencje do tworzenia oddzielnych skupisk dla każdej klasy, ale nie są one tak wyraźne jak w przypadku podziału na płeć. Pasażerowie 1 klasy (zielone kropki) wydają się tworzyć dwa główne skupiska, jedno bardziej po lewej stronie wykresu, a drugie w dolnej części. Pasażerowie 2 klasy (niebieskie kropki) są troszkę bardziej rozproszone, z pewną koncentracją między skupiskami 1 i 3 klasy. Pasażerowie 3 klasy (różowe kropki) tworzą wyraźne skupisko w górnej i prawej części wykresu. To rozmieszczenie sugeruje, że klasa podróży miała wpływ na charakterystyki pasażerów, ale nie determinowała ich tak silnie jak płeć. Pasażerowie z tej samej klasy byli do siebie bardziej podobni pod pewnymi względami, co widać po tendencji do grupowania się, ale te grupy nie są całkowicie odseparowane. Istnieje pewne przenikanie się między klasami, co wskazuje, że niektórzy pasażerowie z różnych klas mogli mieć bardziej zbliżone do siebie cechy niż inni w obrębie tej samej klasy.
+
+### Podsumowanie
+
+Wizualizacje danych pasażerów Titanica, w których rozmieszczenie punktów odzwierciedla podobieństwo cech, a kolory informują o płci i klasie podróży, pozwalają dostrzec wyraźne zależności. Na wykresie uwzględniającym płeć zauważalne jest jednoznaczne rozdzielenie dwóch głównych grup – kobiet i mężczyzn – co wskazuje, że płeć była silnym czynnikiem różnicującym. Widać, że to mężczyźni stanowili większy odsetek ofiar, co mogło wynikać z mniej uprzywilejowanej pozycji w ewakuacji oraz z ogólnie mniej korzystnych warunków, w jakich się znajdowali. Z kolei wizualizacja klas podróży przedstawia nieco mniej wyraźny podział, jednak da się zauważyć pewne skupiska odpowiadające poszczególnym klasom. Można zauważyć, że większa liczba pasażerów 3 klasy zmarła w porównaniu do pozostałych klas, co znajduje odzwierciedlenie na wykresach. Choć granice między klasami są mniej ostre niż w przypadku płci, układ punktów potwierdza, że zarówno płeć, jak i klasa podróży miały istotny wpływ na przebieg tragedii.
