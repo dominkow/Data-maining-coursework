@@ -1,0 +1,764 @@
+---
+title: "Raport Lista 2"
+author: "Dominik Kowalczyk i Matylda Mordal"
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+    toc: true
+    fig_caption: true
+    fig_width: 5
+    fig_height: 4
+    number_sections: true
+  html_document:
+    toc: true
+    df_print: paged
+header-includes:
+- \usepackage[OT4]{polski}
+- \usepackage[utf8]{inputenc}
+- \usepackage{graphicx}
+- \usepackage{float}
+subtitle: Eksploracja danych
+fontsize: 12pt
+---
+
+```{r biblioteki-i-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, results = 'asis')
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(mlbench)
+library(gridExtra)
+library(GGally)
+library(tidyr)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(RColorBrewer)
+library(e1071)
+library(gridExtra) 
+library(tidyr)
+library(summarytools)
+library(purrr)
+library(arules)
+library(cluster)
+library(mclust)
+library(discretization)
+library(titanic)
+library(MASS)
+library(ggrepel)
+library(factoextra)
+library(mlbench)   
+library(class)     
+library(caret)     
+library(rpart)        
+library(rpart.plot)   
+library(ipred)
+```
+
+
+# Zadanie 2 - Porównywanie metod klasyfikacji 
+
+## Przygotowanie danych 
+
+Do wykonania zadania wykorzystamy zbiór danych Glass (mlbench). Opisuje on dane identyfikacyjne szkła używane oraz potrzebne przy śledztwach kryminalistycznych. Przyjrzyjmy się zatem, co znajduje się w analizowanym zbiorze.
+
+```{r wczytanie-danych, echo=FALSE, results='hide'}
+#Wczytanie danych Vehicle
+data("Glass")
+glass_data <- Glass
+```
+
+```{r tabela-opisowa, echo=FALSE}
+#Tworzenie ramki danych z opisem zmiennych dla zbioru danych Glass
+tz_glass <- data.frame(
+  Indeks = seq_along(names(Glass)),
+  "Nazwa zmiennej" = names(Glass),
+  "Typ zmiennej" = sapply(Glass, class),
+  "Opis zmiennej" = c(
+    "Współczynnik załamania światła",
+    "Zawartość sodu",
+    "Zawartość magnezu",
+    "Zawartość glinu",
+    "Zawartość krzemu",
+    "Zawartość potasu",
+    "Zawartość wapnia",
+    "Zawartość baru",
+    "Zawartość żelaza",
+    "Typ szkła"
+  ),
+  check.names = FALSE
+)
+
+#Tworzenie tabeli
+kable(tz_glass, caption = "Opis danych Glass \\label{tab:OpisGlass}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+
+```{r podstawowe-informacja, echo=FALSE, results='hide'}
+#Podstawowe informacje z str i summary 
+str(glass_data)
+summary(glass_data)
+```
+
+```{r przypadki-zmienne, echo=FALSE, results='hide'}
+#Liczba zmiennych i przypadków
+cat("Liczba przypadków:", nrow(glass_data), "\n")
+
+cat("Liczba zmiennych:", ncol(glass_data), "\n")
+
+#Sprawdzenie typu zmiennej Type
+cat("Typ zmiennej Type:", class(glass_data$Type), "\n")
+```
+Liczba przypadków w zbiorze danych `glass_data` wynosi `r nrow(glass_data)`.
+
+Zbiór danych `glass_data` zawiera `r ncol(glass_data)` zmiennych, z czego ostatnia z nich, `Type` przechowuje informacje o przynależności obiektu do konkretnej klasy (tzw. etykieta klas). Jest ona typu: `r class(glass_data$Type)`. Dodatkowo, pozostałe zmienne zawierają informację dotyczące występowania danego piewiastka chemicznego w szkle i są one typu numeric, co pozwala nam stwierdzić, że wszystkie zmienne w naszym analizowanym zbiorze mają prawidłowo przypisane typy.
+
+```{r typy-zmiennych, echo=FALSE, results='hide'}
+#Spradzenie unikalnych klas
+table(glass_data$Type)
+
+#Sprawdzenie typów zmiennej Type (opisującej klasy szkła)
+cat("Typ zmiennej Type:", class(glass_data$Type), "\n")
+```
+```{r tabela-zmiennych, echo=FALSE}
+#Tworzenie ramki danych z wynikami
+class_counts <- table(glass_data$Type)
+
+class_df <- data.frame(
+  `Typ Szkła` = names(class_counts),
+  `Liczba Obserwacji` = as.numeric(class_counts)
+)
+
+#Tworzenie tabeli za pomocą kableExtra
+kable(class_df, booktabs = TRUE, caption = "Liczba Obserwacji dla Każdego Typu Szkła") %>%
+  kable_styling(latex_options = c("striped", "hold_position"))
+```
+
+```{r braki}
+#Czy istnieją jakieś braki w danych?
+any(is.na(glass_data)) || 
+any(sapply(glass_data, function(col) is.character(col) 
+           & (col == "" | grepl(" ", col))))
+```
+- Zatem nasz zbiór danych jest kompletny i nie wsytępują tam żadne braki danych.
+Sprawdźmy rozkład danych w celu zrozumienia z czym mamy doczynienia, jak również poszukując nieścisłości lub różnego rodzaju nietypowych wartości.
+
+```{r pudelkowewartosci, echo=FALSE, fig.width=10, fig.height=6}
+# Identyfikujemy zmienne numeryczne (wszystkie oprócz 'Type')
+numeric_cols <- names(Glass)[sapply(Glass, is.numeric)]
+glass_numeric <- Glass[, numeric_cols]
+
+# Tworzymy listę wykresów pudełkowych
+plot_list <- list()
+for (i in 1:ncol(glass_numeric)) {
+  p <- ggplot(glass_numeric, aes(y = .data[[names(glass_numeric)[i]]])) +
+    geom_boxplot() +
+    labs(y = names(glass_numeric)[i]) +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+  plot_list[[i]] <- p
+}
+
+# Wyświetlamy wszystkie wykresy razem (możesz dostosować liczbę kolumn)
+grid.arrange(grobs = plot_list, ncol = 3)
+```
+
+W analizowanym zbiorze nie mamy doczynienia z "nieścisłościami" rozkładów w sensie błędów w danych, ale raczej charakterystycznymi cechami chemicznymi różnych typów szkła. Dziwne rozkłady (silnie skośne, z licznymi odstającymi) dla takich pierwiastków jak Mg, K i Ba są prawdopodobnie wynikiem specyficznych receptur chemicznych stosowanych do wytwarzania różnych rodzajów szkła o odmiennych właściwościach (np. szkło budowlane vs. szkło optyczne vs. szkło kryształowe), szczególnie że ilość obserwacji dla każdego typu szkła znacznie się różni (dla klasy 1 jest 70 a dla 6 tylko 9).
+
+## Wstępna analiza danych 
+
+Przed budową modeli klasyfikacyjnych przyjrzyjmy się analizowanym danym, zwracając uwagę m.in. na ich charakterystyczne własności oraz spróbujmy (wstępnie) ocenić zdolności dyskryminacyjne (predykcyjne) poszczególnych zmiennych/cech.
+
+W powyższym podpunkcie przeanalizowaliśmy dane w oparciu o wykresy pudełkowe. Spójrzmy teraz, co możemy wywnioskować z histogramów oraz wykresów pudełkowych. 
+```{r pudelkowezklasami, echo=FALSE, fig.height=5, fig.width=10}
+#Zidentyfikuj zmienne numeryczne i zmienną kategorialną 'Typ
+numeric_cols <- names(Glass)[sapply(Glass, is.numeric)]
+
+#Przekształć dane z formatu "szerokiego" na "długi"
+glass_long <- Glass %>%
+  dplyr::select(all_of(numeric_cols), Type) %>% 
+  tidyr::pivot_longer(
+    cols = -Type, # Wszystkie kolumny oprócz 'Type'
+    names_to = "Zmienna",
+    values_to = "Wartość"
+  )
+
+#Stwórz wykresy pudełkowe
+ggplot(glass_long, aes(x = factor(Type), y = Wartość, fill = factor(Type))) +
+  geom_boxplot() +
+  facet_wrap(~ Zmienna, scales = "free_y", ncol = 3) + # scales="free_y" pozwala na różne skale Y dla każdej zmiennej
+  labs(
+    title = "Wykresy pudełkowe zmiennych chemicznych z podziałem na typ szkła",
+    x = "Typ Szkła",
+    y = "Wartość",
+    fill = "Typ Szkła"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r histogramy, echo=FALSE, fig.width=10, fig.height=6}
+# --- Histogramy dla każdej zmiennej numerycznej z podziałem na typ szkła ---
+numeric_cols <- names(Glass)[sapply(Glass, is.numeric)]
+
+glass_long <- Glass %>%
+  # Jawnie wywołujemy dplyr::select, aby uniknąć maskowania
+  dplyr::select(all_of(numeric_cols), Type) %>%
+  tidyr::pivot_longer(cols = -Type, names_to = "Zmienna", values_to = "Wartość")
+
+ggplot(glass_long, aes(x = Wartość, fill = factor(Type))) +
+  geom_histogram(alpha = 0.6, position = "identity") +
+  facet_wrap(~ Zmienna, scales = "free") +
+  labs(title = "Histogramy zmiennych numerycznych z podziałem na typ szkła",
+       fill = "Typ Szkła",
+       x = "Wartość",
+       y = "Częstość") +
+  theme_minimal()
+```
+
+Na podstawie analizy histogramów oraz wcześniejszych wykresów pudełkowych zbioru danych `Glass` możemy wstępnie ocenić zdolności dyskryminacyjne poszczególnych zmiennych chemicznych w kontekście rozróżniania typów szkła. *Magnez* (Mg) wydaje się być silnym predyktorem, ponieważ typ 1 charakteryzuje się znacznie wyższą zawartością Mg w porównaniu do typów 2 i 3, które mają niskie jego wartości. *Bar* (Ba) również wykazuje duży potencjał dyskryminacyjny, szczególnie w identyfikacji typów 2 i 3 (oraz potencjalnie 7), które mają tendencję do posiadania wyższych wartości Ba, w przeciwieństwie do pozostałych typów z niską zawartością. Podobnie, *Potas* (K) silnie wyróżnia typ 2, który zawiera próbki o znacznie wyższych stężeniach K. *Glin* (Al) także przyczynia się do rozróżnienia, z typami 2 i 6 generalnie wykazującymi wyższe wartości Al niż typy 1 i 3.
+
+*Wapń* (Ca) i *Sód* (Na) zdają się mieć umiarkowaną moc dyskryminacyjną. Rozkłady ich wartości dla różnych typów szkła częściowo się pokrywają, ale widoczne są pewne różnice w centralnej tendencji, na przykład typ 2 ma tendencję do niższych wartości Ca i wyższych Na. *Żelazo* (Fe), ze względu na ogólnie niskie i skupione wartości, prawdopodobnie ma ograniczoną zdolność do rozróżniania typów szkła, chociaż wyższe wartości w niektórych próbkach mogą być specyficzne dla pewnych typów. *Krzem* (Si), jako główny składnik szkła, wykazuje niewielką zmienność między typami, sugerując ograniczoną moc dyskryminacyjną, chociaż subtelne różnice mogą być istotne. *Współczynnik załamania światła* (Ri) również wydaje się mieć umiarkowany potencjał predykcyjny, z niewielkimi różnicami w rozkładach między typami.
+
+Podsumowując, zmienne takie jak *Magnez*, *Bar*, *Potas* i *Glin* wydają się najbardziej obiecujące w rozróżnianiu typów szkła na podstawie ich rozkładów i centralnych tendencji. Zmienne *Wapń* i *Sód* mogą dostarczać dodatkowych informacji, podczas gdy *Żelazo* i *Krzem* prawdopodobnie mają mniejsze znaczenie w ogólnej dyskryminacji. *Współczynnik załamania światła* wykazuje subtelne różnice, które mogą być istotne w bardziej złożonych modelach klasyfikacyjnych. Ta wstępna ocena sugeruje, na których cechach warto skupić się podczas budowania i analizowania modeli klasyfikacyjnych dla zbioru danych
+
+```{r wykres-kołowy, echo=FALSE}
+# Obliczanie procentowego udziału klas
+class_counts <- table(Glass$Type)
+class_percentages <- prop.table(class_counts) * 100
+
+# Tworzenie ramki danych do wykresu
+pie_data <- data.frame(
+  Type = factor(names(class_counts), levels = names(class_counts)),
+  Percentage = as.numeric(class_percentages)
+)
+
+# Tworzenie wykresu kołowego
+ggplot(pie_data, aes(x = "", y = Percentage, fill = Type)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")),
+            position = position_stack(vjust = 0.5),
+            size = 3) +
+  labs(title = "Procentowy udział typów szkła", fill = "Typ Szkła") +
+  theme_void()
+```
+
+```{r bladklasyfikacji, echo=FALSE}
+# Obliczanie liczebności klas
+class_counts <- table(Glass$Type)
+
+# Znajdowanie najczęściej występującej klasy i jej liczebności
+most_frequent_class <- names(which.max(class_counts))
+count_most_frequent <- max(class_counts)
+
+# Obliczanie całkowitej liczby obserwacji
+total_observations <- nrow(Glass)
+
+# Obliczanie procentu najczęściej występującej klasy
+percentage_most_frequent <- (count_most_frequent / total_observations) * 100
+
+# Obliczanie błędu klasyfikacji
+error_rate <- 100 - percentage_most_frequent
+
+# Tworzenie ramki danych dla tabeli
+error_table <- data.frame(
+  "Najczęściej występująca klasa" = most_frequent_class,
+  "Procent obserwacji" = paste0(round(percentage_most_frequent, 2), "%"),
+  "Błąd klasyfikacji" = paste0(round(error_rate, 2), "%")
+)
+# Tworzenie tabeli za pomocą kableExtra
+kable(error_table, caption = "Błąd Klasyfikacji przy Przypisaniu Wszystkich do Najczęstszej Klasy", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+```{r wariancje, echo=FALSE}
+#Obliczanie wariancji dla każdej zmiennej numerycznej
+numeric_vars <- Glass[, sapply(Glass, is.numeric)]
+variances <- sapply(numeric_vars, var)
+
+#Tworzenie ramki danych z wariancjami do wyświetlenia w tabeli
+variance_df <- data.frame(
+  Zmienna = names(variances),
+  Wariancja = as.numeric(variances)
+)
+
+kable(variance_df, caption = "Wariancje poszczególnych zmiennych numerycznych", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+```{r standaryzacja, echo=FALSE, fig.width=10, fig.height=6}
+#Identyfikacja zmiennych numerycznych i kategorycznej 'Type'
+numeric_cols <- names(Glass)[sapply(Glass, is.numeric)]
+type_col <- Glass$Type
+
+#Standaryzacja tylko zmiennych numerycznych
+glass_numeric_scaled <- scale(Glass[, numeric_cols])
+
+#Przekształcenie standaryzowanych danych z powrotem do ramki danych i dodanie kolumny 'Type'
+glass_scaled_df <- as.data.frame(glass_numeric_scaled)
+glass_scaled_df$Type <- type_col # Dodajemy z powrotem kolumnę 'Type'
+
+#Przygotowanie danych do wykresu pudełkowego w formacie "długim"
+glass_long_scaled <- glass_scaled_df %>%
+  pivot_longer(
+    cols = -Type, #Wszystkie kolumny oprócz 'Type'
+    names_to = "Zmienna",
+    values_to = "Wartość_Standaryzowana"
+  )
+
+#Wykresy pudełkowe dla standaryzowanych zmiennych
+ggplot(glass_long_scaled, aes(x = Zmienna, y = Wartość_Standaryzowana, fill = Zmienna)) +
+  geom_boxplot(show.legend = FALSE) + #Ukrywamy legendę fill, bo Zmienna jest już na osi X
+  labs(
+    title = "Wykresy pudełkowe standaryzowanych zmiennych chemicznych",
+    y = "Standaryzowana wartość"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) #Obróć etykiety osi X dla czytelności
+```
+
+
+## Ocena dokładności klasyfikacji i porównanie metod
+
+### Pojedyńczy podział na zbiór uczący i testowy
+
+W ramach naszej analizy oceniliśmy dokładność klasyfikacji trzech algorytmów: metody k-najbliższych sąsiadów (k-NN), drzew klasyfikacyjnych oraz naiwnego klasyfikatora bayesowskiego. Do tego celu wykorzystaliśmy zbiór danych `Glass`, dzieląc go na zbiór uczący (2/3 danych) i testowy (1/3 danych). Naszą ocenę oparliśmy na macierzach pomyłek i błędach klasyfikacji. Naszym celem było nie tylko ocena skuteczności klasyfikatorów na danych uczących i testowych w oparciu o macierze pomyłek i błędy klasyfikacji, ale także zastosowanie bardziej zaawansowanych schematów oceny dokładności.
+
+
+```{r Metoda_k-najbliższych_sąsiadów, message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1)  # Ustalony seed dla powtarzalności
+
+# Podział: 2/3 uczący, 1/3 testowy
+index_uczacy_glass <- createDataPartition(Glass$Type, p = 2/3, list = FALSE)
+
+zbior_uczacy_glass <- Glass[index_uczacy_glass, ]
+zbior_testowy_glass <- Glass[-index_uczacy_glass, ]
+
+# Dane i etykiety
+X_uczacy_knn <- zbior_uczacy_glass[, -10]
+X_testowy_knn <- zbior_testowy_glass[, -10]
+y_uczacy_knn <- zbior_uczacy_glass$Type
+y_testowy_knn <- zbior_testowy_glass$Type
+
+# Standaryzacja
+X_uczacy_scaled_knn <- scale(X_uczacy_knn)
+X_testowy_scaled_knn <- scale(X_testowy_knn,
+                              center = attr(X_uczacy_scaled_knn, "scaled:center"),
+                              scale = attr(X_uczacy_scaled_knn, "scaled:scale"))
+
+# Model k-NN
+k_knn <- 5
+y_pred_test_knn <- knn(train = X_uczacy_scaled_knn, test = X_testowy_scaled_knn,
+                       cl = y_uczacy_knn, k = k_knn)
+
+# Macierze pomyłek i błędy
+conf_matrix_test_knn <- table(Prawdziwa = y_testowy_knn, Predykcja = y_pred_test_knn)
+blad_test_knn <- mean(y_pred_test_knn != y_testowy_knn)
+
+y_pred_train_knn <- knn(train = X_uczacy_scaled_knn, test = X_uczacy_scaled_knn,
+                        cl = y_uczacy_knn, k = k_knn)
+blad_uczacy_knn <- mean(y_pred_train_knn != y_uczacy_knn)
+conf_matrix_train_knn <- table(Prawdziwa = y_uczacy_knn, Predykcja = y_pred_train_knn)
+
+kable(conf_matrix_train_knn, format = "markdown",
+      caption = "Macierz pomyłek dla zbioru uczącego (K-najbliższych sąsiadów) \\label{tab:MacierzPomUczenieKNN}")
+
+kable(conf_matrix_test_knn, format = "markdown",
+      caption = "Macierz pomyłek dla zbioru testowego (K-najbliższych sąsiadów) \\label{tab:MacierzPomTestKNN}")
+
+
+```
+Dla metody k-NN, z parametrem `k=5`, zaobserwowaliśmy, że macierz pomyłek dla zbioru testowego (Tabela \ref{tab:MacierzPomTestKNN}) ujawniła poprawne klasyfikacje dla większości przypadków, ale także wskazała na istotne pomyłki, na przykład 7 przypadków klasy 1 zostało błędnie sklasyfikowanych jako klasa 2, a 5 przypadków klasy 2 jako klasa 1. Na zbiorze uczącym (Tabela \ref{tab:MacierzPomUczenieKNN}) model k-NN wykazał lepsze dopasowanie. Finalnie, błąd klasyfikacji dla k-NN wyniósł `r round(blad_uczacy_knn*100, 2)`% na zbiorze uczącym i `r round(blad_test_knn*100, 2)`% na zbiorze testowym (Tabela \ref{tab:PorownanieBledow}).
+
+
+```{r Drzewa_klasyfikacyjne, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:DrzewoGlass}Drzewo klasyfikacyjne dla zbioru danych Glass", fig.height=5, fig.width=10}
+# Budowa drzewa klasyfikacyjnego
+model_tree <- Type ~ .
+glass_tree <- rpart(model_tree, data = zbior_uczacy_glass)
+
+# Wizualizacja drzewa
+rpart.plot(glass_tree, main = "Drzewo klasyfikacyjne dla zbioru uczącego")
+
+# Predykcja na zbiorze testowym i uczącym
+pred_test_tree <- predict(glass_tree, newdata = zbior_testowy_glass, type = "class")
+pred_uczacy_tree <- predict(glass_tree, newdata = zbior_uczacy_glass, type = "class")
+
+# Macierze pomyłek
+conf_test_tree <- table(Prawdziwa = zbior_testowy_glass$Type, Predykcja = pred_test_tree)
+conf_uczacy_tree <- table(Prawdziwa = zbior_uczacy_glass$Type, Predykcja = pred_uczacy_tree)
+
+# Błędy klasyfikacji
+blad_test_tree <- mean(pred_test_tree != zbior_testowy_glass$Type)
+blad_uczacy_tree <- mean(pred_uczacy_tree != zbior_uczacy_glass$Type)
+
+kable(conf_uczacy_tree, format = "markdown",
+      caption = "Macierz pomyłek dla zbioru uczącego (Drzewo klasyfikacyjne) \\label{tab:MacierzPomUczenieTree}")
+
+kable(conf_test_tree, format = "markdown",
+      caption = "Macierz pomyłek dla zbioru testowego (Drzewo klasyfikacyjne) \\label{tab:MacierzPomTestTree}")
+
+```
+
+Przechodząc do analizy drzew klasyfikacyjnych, zbudowaliśmy model, którego struktura została przedstawiona na Rysunku \ref{fig:DrzewoGlass}. Drzewo rozpoczęło podział od zmiennej dotyczącej zawartości baru (Ba < 0.34), a kolejne rozgałęzienia opierały się na wartościach współczynnika załamania światła (RI), zawartości glinu (Al), magnezu (Mg) oraz sodu (Na). Choć klasy 1 i 2 dominowały w przewidywaniach, obecność różnych klas w poszczególnych liściach drzewa wskazuje na trudności modelu w jednoznacznym rozróżnianiu niektórych przypadków, co może prowadzić do błędów klasyfikacyjnych i sugeruje potrzebę dalszej optymalizacji.
+
+Macierz pomyłek dla zbioru testowego (Tabela \ref{tab:MacierzPomTestTree}) potwierdziła te obserwacje, szczególnie widoczny był brak trafnych klasyfikacji dla klasy 6, której wszystkie przypadki zostały błędnie przypisane. Na zbiorze uczącym (Tabela \ref{tab:MacierzPomUczenieTree}) drzewo klasyfikacyjne osiągnęło lepsze wyniki, ale wciąż były widoczne pomyłki. Ostatecznie, błąd klasyfikacji dla drzewa wyniósł `r round(blad_uczacy_tree*100, 2)`% na zbiorze uczącym oraz aż `r round(blad_test_tree*100, 2)`% na zbiorze testowym (Tabela \ref{tab:PorownanieBledow}). Ta różnica sugeruje, że model słabo radzi sobie z dostosowaniem do nowych danych, co sprawia, że jest mniej skuteczny niż metoda k-NN.
+
+
+```{r Naiwny_klasyfikator_bayesowski, message=FALSE, warning=FALSE, echo=FALSE}
+# Budowa modelu Bayesa
+model_nb <- naiveBayes(Type ~ ., data = zbior_uczacy_glass)
+
+# Predykcje
+pred_uczacy_nb <- predict(model_nb, newdata = zbior_uczacy_glass)
+pred_testowy_nb <- predict(model_nb, newdata = zbior_testowy_glass)
+
+# Macierze pomyłek
+conf_uczacy_nb <- table(Prawdziwa = zbior_uczacy_glass$Type, Predykcja = pred_uczacy_nb)
+conf_testowy_nb <- table(Prawdziwa = zbior_testowy_glass$Type, Predykcja = pred_testowy_nb)
+
+# Błędy klasyfikacji
+blad_uczacy_nb <- mean(pred_uczacy_nb != zbior_uczacy_glass$Type)
+blad_test_nb <- mean(pred_testowy_nb != zbior_testowy_glass$Type)
+
+# Wyświetlenie macierzy pomyłek
+kable(conf_uczacy_nb, format = "markdown",
+      caption = "Macierz pomyłek dla zbioru uczącego (Naive Bayes) \\label{tab:MacierzPomUczenieNB}")
+
+kable(conf_testowy_nb, format = "markdown",
+      caption = "Macierz pomyłek dla zbioru testowego (Naive Bayes) \\label{tab:MacierzPomTestNB}")
+
+# Podsumowanie błędów klasyfikacji wszystkich metod 
+porownanie <- data.frame(
+  Metoda = c("K-najbliższych sąsiadów (k=5)", "Drzewo klasyfikacyjne", "Naiwny Bayes"),
+  `Błąd uczący` = sprintf("%.2f%%", c(blad_uczacy_knn, blad_uczacy_tree, blad_uczacy_nb) * 100),
+  `Błąd testowy` = sprintf("%.2f%%", c(blad_test_knn, blad_test_tree, blad_test_nb) * 100)
+)
+
+kable(porownanie, format = "markdown", caption = "Porównanie błędów klasyfikacji dla różnych metod \\label{tab:PorownanieBledow}")
+
+```
+Najsłabsze wyniki w naszej analizie uzyskał naiwny klasyfikator bayesowski. Macierz pomyłek dla zbioru uczącego (Tabela \ref{tab:MacierzPomUczenieNB}) oraz zbioru testowego (Tabela \ref{tab:MacierzPomTestNB}) jasno pokazała liczne pomyłki. Model ten charakteryzował się najwyższymi błędami klasyfikacji: `r round(blad_uczacy_nb*100, 2)`% na zbiorze uczącym i `r round(blad_test_nb*100, 2)`% na zbiorze testowym (Tabela \ref{tab:PorownanieBledow}).
+
+Podsumowując wyniki z pojedynczego podziału danych, metoda k-NN okazała się najskuteczniejsza z najniższym błędem na zbiorze testowym. Drzewo klasyfikacyjne, pomimo niższego błędu uczącego, miało znacznie wyższy błąd testowy, co wskazuje na słabsze dostosowanie do nowych danych. Naiwny Bayes zdecydowanie odstawał pod względem skuteczności.
+
+```{r Zaawansowana_ocena_dokladnosci, message=FALSE, warning=FALSE, echo=FALSE}
+
+# Wrappery predict
+my.predict <- function(model, newdata) predict(model, newdata = newdata, type = "class")
+
+# Wrappery modelu
+my.naiveBayes <- function(formula, data) naiveBayes(formula = formula, data = data)
+
+my.tree <- function(formula, data) rpart(formula = formula, data = data)
+
+my.knn <- function(formula, data, k_sasiad = 5) {
+  ipredknn(formula = formula, data = data, k = k_sasiad)
+}
+
+# Estymacja błędów - Naive Bayes
+blad_nb_cv <- errorest(Type ~ ., glass_data, model = my.naiveBayes, predict = my.predict,
+                       estimator = "cv", est.para = control.errorest(k = 10))
+
+blad_nb_boot <- errorest(Type ~ ., glass_data, model = my.naiveBayes, predict = my.predict,
+                         estimator = "boot", est.para = control.errorest(nboot = 50))
+
+blad_nb_632 <- errorest(Type ~ ., glass_data, model = my.naiveBayes, predict = my.predict,
+                        estimator = "632plus", est.para = control.errorest(nboot = 50))
+
+# Estymacja błędów - Drzewo decyzyjne
+blad_tree_cv <- errorest(Type ~ ., glass_data, model = my.tree, predict = my.predict,
+                         estimator = "cv", est.para = control.errorest(k = 10))
+
+blad_tree_boot <- errorest(Type ~ ., glass_data, model = my.tree, predict = my.predict,
+                           estimator = "boot", est.para = control.errorest(nboot = 50))
+
+blad_tree_632 <- errorest(Type ~ ., glass_data, model = my.tree, predict = my.predict,
+                          estimator = "632plus", est.para = control.errorest(nboot = 50))
+
+# Estymacja błędów - k-NN
+blad_knn_cv <- errorest(Type ~ ., glass_data, model = my.knn, predict = my.predict,
+                        estimator = "cv", est.para = control.errorest(k = 10), k_sasiad = 5)
+
+blad_knn_boot <- errorest(Type ~ ., glass_data, model = my.knn, predict = my.predict,
+                          estimator = "boot", est.para = control.errorest(nboot = 50), k_sasiad = 5)
+
+blad_knn_632 <- errorest(Type ~ ., glass_data, model = my.knn, predict = my.predict,
+                         estimator = "632plus", est.para = control.errorest(nboot = 50), k_sasiad = 5)
+
+# Podsumowanie wyników
+porownanie_zaaw <- data.frame(
+  Metoda = rep(c("K-najbliższych sąsiadów (k=5)", "Drzewo klasyfikacyjne", "Naive Bayes"), each = 3), 
+  Schemat = rep(c("Cross-validation", "Bootstrap", "632+"), times = 3),
+  Blad_klasyfikacji = c(blad_knn_cv$error, blad_knn_boot$error, blad_knn_632$error,
+                          blad_tree_cv$error, blad_tree_boot$error, blad_tree_632$error,
+                          blad_nb_cv$error, blad_nb_boot$error, blad_nb_632$error) 
+)
+
+porownanie_zaaw_pivot_format <- porownanie_zaaw %>% 
+  mutate(Blad_klasyfikacji = sprintf("%.2f%%", Blad_klasyfikacji * 100)) %>%
+  pivot_wider(names_from = Schemat, values_from = Blad_klasyfikacji)
+
+# Wyświetlenie tabeli z błędami w formacie procentowym
+kable(porownanie_zaaw_pivot_format, format = "markdown", digits = 4,
+      caption = "Porównanie błędów klasyfikacji przy użyciu zaawansowanych metod oceny skuteczności \\label{tab:PorownanieBledowZaawansowane}") %>%
+  kable_styling(position = "center")
+
+# Obliczenie min i max
+min_blad_nb <- min(blad_nb_cv$error, blad_nb_boot$error, blad_nb_632$error)
+max_blad_nb <- max(blad_nb_cv$error, blad_nb_boot$error, blad_nb_632$error)
+
+min_blad_tree <- min(blad_tree_cv$error, blad_tree_boot$error, blad_tree_632$error)
+max_blad_tree <- max(blad_tree_cv$error, blad_tree_boot$error, blad_tree_632$error)
+
+min_blad_knn <- min(blad_knn_cv$error, blad_knn_boot$error, blad_knn_632$error)
+max_blad_knn <- max(blad_knn_cv$error, blad_knn_boot$error, blad_knn_632$error)
+```
+
+Aby zwiększyć wiarygodność naszych wniosków, zastosowaliśmy również bardziej zaawansowane schematy oceny dokładności, takie jak 10-krotna cross-validation, bootstrap (z 50 próbami) oraz metodę .632+ (z 50 próbami). Wyniki tych analiz są przedstawione w Tabeli 8. Zaobserwowaliśmy, że w tych zaawansowanych schematach metoda k-NN nadal utrzymywała dobrą dokładność, z błędami `r round(min_blad_knn*100, 2)`-`r round(max_blad_knn*100, 2)`%, co było zgodne z początkowymi obserwacjami. Co jednak zaskakujące, drzewo klasyfikacyjne w tych bardziej wiarygodnych schematach (wartości `r round(min_blad_tree*100, 2)`-`r round(max_blad_tree*100, 2)`%) wykazało się lepszą dokładnością niż w pojedynczym podziale. Sugeruje to, że początkowy pojedynczy podział mógł być niemiarodajny dla oceny drzewa. Naiwny klasyfikator bayesowski konsekwentnie osiągał najgorsze rezultaty, z błędami przekraczającymi  `r round(min_blad_nb*100, 2)`%  we wszystkich zaawansowanych metodach, co potwierdziło jego niską skuteczność dla analizowanego zbioru danych. 
+
+Wnioskujemy zatem, że wybór schematu oceny dokładności miał istotny wpływ na ocenę skuteczności drzewa klasyfikacyjnego, co podkreśla znaczenie stosowania zaawansowanych metod w celu uzyskania bardziej stabilnych i wiarygodnych estymacji błędu. Spośród użytych metod, najlepszą stabilność i najniższe estymowane błędy dla większości modeli zapewniła metoda .632+, co czyni ją szczególnie rekomendowaną do oceny modeli w sytuacjach, gdzie dostępność danych jest ograniczona lub podział losowy może prowadzić do dużych odchyleń w wynikach.
+
+### Różne parametry i różne podzbiory cech
+
+```{r Rozne_podzbiory, message=FALSE, warning=FALSE, echo=FALSE}
+
+# Wybrane cechy o najwyższej zdolności dyskryminacyjnej
+wybrane_cechy <- c("RI", "Na", "Mg", "Al", "Ba")
+
+# Dane z wybranymi cechami
+X_uczacy_wybrane <- zbior_uczacy_glass[, wybrane_cechy]
+X_testowy_wybrane <- zbior_testowy_glass[, wybrane_cechy]
+
+# Standaryzacja
+X_uczacy_scaled_wybrane <- scale(X_uczacy_wybrane)
+X_testowy_scaled_wybrane <- scale(X_testowy_wybrane,
+                                  center = attr(X_uczacy_scaled_wybrane, "scaled:center"),
+                                  scale = attr(X_uczacy_scaled_wybrane, "scaled:scale"))
+
+# k-NN dla wybranych cech
+y_pred_test_wybrane_knn <- knn(train = X_uczacy_scaled_wybrane, test = X_testowy_scaled_wybrane,
+                               cl = y_uczacy_knn, k = k_knn)
+blad_test_wybrane_knn <- mean(y_pred_test_wybrane_knn != y_testowy_knn)
+
+blad_uczacy_wybrane_knn <- mean(knn(train = X_uczacy_scaled_wybrane, test = X_uczacy_scaled_wybrane,
+                                    cl = y_uczacy_knn, k = k_knn) != y_uczacy_knn)
+
+# Drzewo dla wybranych cech
+glass_tree_wybrane <- rpart(Type ~ ., data = zbior_uczacy_glass[, c(wybrane_cechy, "Type")])
+pred_test_tree_wybrane <- predict(glass_tree_wybrane, newdata = zbior_testowy_glass[, c(wybrane_cechy, "Type")], type = "class")
+blad_test_tree_wybrane <- mean(pred_test_tree_wybrane != zbior_testowy_glass$Type)
+pred_uczacy_tree_wybrane <- predict(glass_tree_wybrane,
+                                    newdata = zbior_uczacy_glass[, c(wybrane_cechy, "Type")],
+                                    type = "class")
+blad_uczacy_tree_wybrane <- mean(pred_uczacy_tree_wybrane != zbior_uczacy_glass$Type)
+
+# Naive Bayes dla wybranych cech
+model_nb_wybrane <- naiveBayes(Type ~ ., data = zbior_uczacy_glass[, c(wybrane_cechy, "Type")])
+pred_testowy_nb_wybrane <- predict(model_nb_wybrane, newdata = zbior_testowy_glass[, c(wybrane_cechy, "Type")])
+blad_test_nb_wybrane <- mean(pred_testowy_nb_wybrane != zbior_testowy_glass$Type)
+pred_uczacy_nb_wybrane <- predict(model_nb_wybrane,
+                                  newdata = zbior_uczacy_glass[, c(wybrane_cechy, "Type")])
+blad_uczacy_nb_wybrane <- mean(pred_uczacy_nb_wybrane != zbior_uczacy_glass$Type)
+
+# Tabela porównawcza
+porownanie_cech <- data.frame(
+  Metoda = c("K-najbliższych sąsiadów (wszystkie cechy)", 
+             "K-najbliższych sąsiadów (wybrane cechy)",
+             "Drzewo klasyfikacyjne (wszystkie cechy)",
+             "Drzewo klasyfikacyjne (wybrane cechy)",
+             "Naive Bayes (wszystkie cechy)",
+             "Naive Bayes (wybrane cechy)"),
+  `Błąd uczący` = sprintf("%.2f%%", 100 * c(
+    blad_uczacy_knn,
+    blad_uczacy_wybrane_knn,
+    blad_uczacy_tree,
+    blad_uczacy_tree_wybrane,
+    blad_uczacy_nb,
+    blad_uczacy_nb_wybrane
+  )),
+  `Błąd testowy` = sprintf("%.2f%%", 100 * c(
+    blad_test_knn,
+    blad_test_wybrane_knn,
+    blad_test_tree,
+    blad_test_tree_wybrane,
+    blad_test_nb,
+    blad_test_nb_wybrane
+  )),
+  check.names = FALSE  
+)
+
+kable(porownanie_cech, format = "markdown",
+      caption = "Porównanie błędów klasyfikacji dla różnych podzbiorów cech \\label{tab:PorownanieCechZbiory}")
+
+```
+```{r Rozny_dobor_parametrow1, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:BłądKNN}Wpływ liczby sąsiadów (k) na błąd klasyfikacji", fig.height=5, fig.width=10}
+set.seed(1)
+# Lista k
+k_values <- c(2, 4, 6, 8, 10)
+
+# Wyniki przechowamy w data frame
+porownanie_knn_parametry <- data.frame()
+
+for (k in k_values) {
+  # KNN dla wszystkich cech
+  y_pred_train_all <- knn(train = X_uczacy_scaled_knn, test = X_uczacy_scaled_knn,
+                          cl = y_uczacy_knn, k = k)
+  y_pred_test_all <- knn(train = X_uczacy_scaled_knn, test = X_testowy_scaled_knn,
+                         cl = y_uczacy_knn, k = k)
+  
+  blad_uczacy_all <- mean(y_pred_train_all != y_uczacy_knn)
+  blad_testowy_all <- mean(y_pred_test_all != y_testowy_knn)
+  
+  # KNN dla wybranych cech
+  y_pred_train_sel <- knn(train = X_uczacy_scaled_wybrane, test = X_uczacy_scaled_wybrane,
+                          cl = y_uczacy_knn, k = k)
+  y_pred_test_sel <- knn(train = X_uczacy_scaled_wybrane, test = X_testowy_scaled_wybrane,
+                         cl = y_uczacy_knn, k = k)
+  
+  blad_uczacy_sel <- mean(y_pred_train_sel != y_uczacy_knn)
+  blad_testowy_sel <- mean(y_pred_test_sel != y_testowy_knn)
+  
+  # Dodaj wiersz do tabeli
+  porownanie_knn_parametry <- rbind(porownanie_knn_parametry, data.frame(
+    k = k,
+    `Błąd uczący (wszystkie cechy)` = sprintf("%.2f%%", 100 * blad_uczacy_all),
+    `Błąd testowy (wszystkie cechy)` = sprintf("%.2f%%", 100 * blad_testowy_all),
+    `Błąd uczący (wybrane cechy)` = sprintf("%.2f%%", 100 * blad_uczacy_sel),
+    `Błąd testowy (wybrane cechy)` = sprintf("%.2f%%", 100 * blad_testowy_sel),
+    check.names = FALSE
+  ))
+}
+
+# Wyświetlenie tabeli
+kable(porownanie_knn_parametry, format = "markdown",
+      caption = "Porównanie błędów klasyfikacji dla różnych wartości k (k-NN) \\label{tab:PorownanieKNNparam}")
+
+# Konwersja 
+blad_ucz_all <- as.numeric(sub("%", "", porownanie_knn_parametry$`Błąd uczący (wszystkie cechy)`)) / 100
+blad_test_all <- as.numeric(sub("%", "", porownanie_knn_parametry$`Błąd testowy (wszystkie cechy)`)) / 100
+blad_ucz_sel <- as.numeric(sub("%", "", porownanie_knn_parametry$`Błąd uczący (wybrane cechy)`)) / 100
+blad_test_sel <- as.numeric(sub("%", "", porownanie_knn_parametry$`Błąd testowy (wybrane cechy)`)) / 100
+k_values <- porownanie_knn_parametry$k
+
+# Wykres 1 - Wszystkie cechy
+plot(k_values, blad_ucz_all, type = "b", col = "navy", lwd = 2, pch = 1,
+     ylim = c(0, max(c(blad_ucz_all, blad_test_all, blad_ucz_sel, blad_test_sel))),
+     main = "Błąd klasyfikacji dla różnych wartości k",
+     xlab = "k (liczba sąsiadów)", ylab = "Błąd klasyfikacji")
+
+lines(k_values, blad_test_all, type = "b", col = "maroon", lwd = 2, pch = 1)
+lines(k_values, blad_ucz_sel, type = "b", col = "seagreen", lwd = 2, pch = 2)
+lines(k_values, blad_test_sel, type = "b", col = "orange", lwd = 2, pch = 2)
+
+legend("bottomright", legend = c("Zbiór uczący - wszystkie cechy", 
+                              "Zbiór testowy - wszystkie cechy",
+                              "Zbiór uczący - wybrane cechy",
+                              "Zbiór testowy - wybrane cechy"),
+       col = c("navy", "maroon", "seagreen", "orange"),
+       pch = c(1, 1, 2, 2), lty = 1, lwd = 2)
+
+``` 
+
+```{r Rozne_podzbiory_bledy_zaawansowane_all, message=FALSE, warning=FALSE, echo=FALSE}
+# Drzewo klasyfikacyjne - wszystkie cechy
+model_tree_all <- function(formula, data) {
+  rpart(formula, data = data)
+}
+
+predict_tree <- function(object, newdata) {
+  predict(object, newdata = newdata, type = "class")
+}
+
+bledy_tree_all <- data.frame(
+  Metoda = "Drzewo klasyfikacyjne (wszystkie cechy)",
+  `Cross-validation` = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                                       model = model_tree_all,
+                                       predict = predict_tree,
+                                       estimator = "cv",
+                                       est.para = control.errorest(k = 10))$error),
+  Bootstrap = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                                 model = model_tree_all,
+                                 predict = predict_tree,
+                                 estimator = "boot",
+                                 est.para = control.errorest(nboot = 50))$error),
+  `632+` = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                             model = model_tree_all,
+                             predict = predict_tree,
+                             estimator = "632plus",
+                             est.para = control.errorest(nboot = 50))$error),
+  check.names = FALSE
+)
+
+# Naive Bayes - wszystkie cechy 
+model_nb_all <- function(formula, data) {
+  naiveBayes(formula, data = data)
+}
+
+predict_nb <- function(object, newdata) {
+  predict(object, newdata)
+}
+
+bledy_nb_all <- data.frame(
+  Metoda = "Naive Bayes (wszystkie cechy)",
+  `Cross-validation` = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                                       model = model_nb_all,
+                                       predict = predict_nb,
+                                       estimator = "cv",
+                                       est.para = control.errorest(k = 10))$error),
+  Bootstrap = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                                 model = model_nb_all,
+                                 predict = predict_nb,
+                                 estimator = "boot",
+                                 est.para = control.errorest(nboot = 50))$error),
+  `632+` = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                             model = model_nb_all,
+                             predict = predict_nb,
+                             estimator = "632plus",
+                             est.para = control.errorest(nboot = 50))$error),
+  check.names = FALSE
+)
+
+# k-NN - wszystkie cechy
+model_knn_all <- function(formula, data, ...) {
+  X <- scale(data[, setdiff(names(data), "Type")])
+  y <- data$Type
+  list(X = X, y = y)
+}
+
+predict_knn_all <- function(object, newdata) {
+  X_test <- scale(newdata[, setdiff(names(newdata), "Type")],
+                  center = attr(object$X, "scaled:center"),
+                  scale = attr(object$X, "scaled:scale"))
+  knn(train = object$X, test = X_test, cl = object$y, k = k_knn)
+}
+
+# Błędy k-NN (wszystkie cechy)
+bledy_knn_all <- data.frame(
+  Metoda = "K-najbliższych sąsiadów (wszystkie cechy)",
+  `Cross-validation` = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                                       model = model_knn_all,
+                                       predict = predict_knn_all,
+                                       estimator = "cv",
+                                       est.para = control.errorest(k = 10))$error),
+  Bootstrap = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                                 model = model_knn_all,
+                                 predict = predict_knn_all,
+                                 estimator = "boot",
+                                 est.para = control.errorest(nboot = 50))$error),
+  `632+` = sprintf("%.2f%%", 100 * errorest(Type ~ ., data = glass_data,
+                             model = model_knn_all,
+                             predict = predict_knn_all,
+                             estimator = "632plus",
+                             est.para = control.errorest(nboot = 50))$error),
+  check.names = FALSE
+)
+
+# Połączenie wszystkiego
+bledy_wszystkie <- rbind(bledy_tree_all, bledy_nb_all, bledy_knn_all)
+
+kable(bledy_wszystkie, format = "markdown",
+      caption = "Zaawansowane błędy klasyfikacji dla wszystkich cech \\label{tab:bledy_wszystkie}")
+```

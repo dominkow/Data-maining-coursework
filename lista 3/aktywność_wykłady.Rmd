@@ -1,0 +1,128 @@
+---
+title: "Aktywność ED"
+author: "Dominik Kowalczyk"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r 1zadanie, echo=FALSE}
+#Dane treningowe z tabeli
+dane <- data.frame(
+  X1 = c(1, 0, 0, 0, 0, 1, 1, 1, 1),
+  X2 = c(0, 0, 0, 1, 0, 1, 1, 1, 0),
+  X3 = c(1, 1, 0, 0, 1, 0, 1, 1, 1),
+  Klasa = factor(c('+', '+', '+', '+', '+', '-', '-', '-', '-'))
+)
+
+#Dane do predykcji
+x0 <- c(0, 1, 0)
+
+#Liczba obserwacji w każdej klasie
+n_plus <- sum(dane$Klasa == '+')
+n_minus <- sum(dane$Klasa == '-')
+n <- nrow(dane)
+
+#Prawdopodobieństwa początkowe 
+pi_plus <- n_plus / n
+pi_minus <- n_minus / n
+
+#Funkcja do obliczania prawdopodobieństw warunkowych
+prawd_warunkowe <- function(dane, klasa, x) {
+  prawdopodobienstwa <- c()           #tworzymy pusty wektor
+  for (i in 1:length(x)) {
+    prawdopodobienstwo <- sum(dane[dane$Klasa == klasa, i] == x[i]) / sum(dane$Klasa == klasa)
+    prawdopodobienstwa <- c(prawdopodobienstwo, prawdopodobienstwo)
+  }
+  return(prod(prawdopodobienstwa))        
+  #zwrcamy iloczyn prawdopodobienstw jak we wzorze z wykladu
+}
+
+#Prawdopodobieństwa warunkowe dla x0
+p_x0_plus <- prawd_warunkowe(dane, '+', x0)
+p_x0_minus <- prawd_warunkowe(dane, '-', x0)
+
+#Prawdopodobieństwa zaktualizowane (bez normalizacji)
+p_plus_x0 <- p_x0_plus * pi_plus
+p_minus_x0 <- p_x0_minus * pi_minus
+
+#Klasyfikacja
+klasa_predykowana <- ifelse(p_plus_x0 > p_minus_x0, '+', '-')
+
+#Wynik
+cat("Prawdopodobieństwo P(x0 | +):", p_x0_plus, "\n")
+cat("Prawdopodobieństwo P(x0 | -):", p_x0_minus, "\n")
+cat("Prawdopodobieństwo P(+ | x0) * P(+):", p_plus_x0, "\n")
+cat("Prawdopodobieństwo P(- | x0) * P(-):", p_minus_x0, "\n")
+cat("Predykowana klasa dla x0 =", paste(x0, collapse = ", "), ":", klasa_predykowana, "\n")
+```
+```{r Zadanie2, echo=FALSE}
+#Funkcja do obliczania miar niejednorodności (różnorodności klas)
+oblicz_miary_niejednorodnosci <- function(liczba_a, liczba_b) {
+  liczba_wszystkich <- liczba_a + liczba_b
+  proporcja_a <- liczba_a / liczba_wszystkich
+  proporcja_b <- liczba_b / liczba_wszystkich
+
+  #Błąd klasyfikacji - jak z wykładu
+  blad_klasyfikacji <- 1 - max(proporcja_a, proporcja_b)
+
+  #Indeks Giniego - jak z wykładu
+  indeks_giniego <- 1 - (proporcja_a^2 + proporcja_b^2)
+
+  #Entropia - jak z wykładu
+  entropia <- - (proporcja_a * log2(proporcja_a) + proporcja_b * log2(proporcja_b))
+  if(is.nan(entropia)) entropia <- 0  #Obsługa przypadku, gdy liczymy entropię dla 0 * log2(0)
+
+  return(c(blad_klasyfikacji = blad_klasyfikacji, indeks_giniego = indeks_giniego, entropia = entropia))
+}
+
+#Węzeł macierzysty - oznaczamy go "m"
+m <- oblicz_miary_niejednorodnosci(400, 400)
+
+#Podział I
+m_lewy_1 <- oblicz_miary_niejednorodnosci(300, 100)
+m_prawy_1 <- oblicz_miary_niejednorodnosci(100, 300)
+
+#Podział II
+m_lewy_2 <- oblicz_miary_niejednorodnosci(200, 400)
+m_prawy_2 <- oblicz_miary_niejednorodnosci(200, 0)
+
+# Funkcja do obliczania ważonej niejednorodności i redukcji (zmniejszenia) niejednorodności
+oblicz_wazona_niejednorodnosc_i_redukcje <- function(
+  węzeł_rodzicielski,
+  liczba_lewych_a, liczba_lewych_b,
+  liczba_prawych_a, liczba_prawych_b
+) {
+  liczba_wszystkich_lewych <- liczba_lewych_a + liczba_lewych_b
+  liczba_wszystkich_prawych <- liczba_prawych_a + liczba_prawych_b
+  liczba_wszystkich_rodzica <- liczba_wszystkich_lewych + liczba_wszystkich_prawych
+
+  waga_lewy <- liczba_wszystkich_lewych / liczba_wszystkich_rodzica
+  waga_prawy <- liczba_wszystkich_prawych / liczba_wszystkich_rodzica
+
+  niejednorodnosc_lewy <- oblicz_miary_niejednorodnosci(liczba_lewych_a, liczba_lewych_b)
+  niejednorodnosc_prawy <- oblicz_miary_niejednorodnosci(liczba_prawych_a, liczba_prawych_b)
+
+  wazona_niejednorodnosc <- waga_lewy * niejednorodnosc_lewy + waga_prawy * niejednorodnosc_prawy
+  redukcja <- węzeł_rodzicielski - wazona_niejednorodnosc
+
+  return(rbind(niejednorodnosc_lewy, niejednorodnosc_prawy, wazona_niejednorodnosc, redukcja))
+}
+
+#Obliczenia dla Podziału I
+wynik_1 <- oblicz_wazona_niejednorodnosc_i_redukcje(m, 300, 100, 100, 300)
+rownames(wynik_1) <- c("Lewy", "Prawy", "Wazona Niejednorodnosc", "Redukcja")
+print("Podział I:")
+print(wynik_1)
+
+
+#Obliczenia dla Podziału II
+wynik_2 <- oblicz_wazona_niejednorodnosc_i_redukcje(m, 200, 400, 200, 0)
+rownames(wynik_2) <- c("Lewy", "Prawy", "Wazona Niejednorodnosc", "Redukcja")
+print("Podział II:")
+print(wynik_2)
+```
+
