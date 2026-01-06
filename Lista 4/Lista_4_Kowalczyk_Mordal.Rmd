@@ -1,0 +1,992 @@
+---
+title: "Raport Lista 4"
+author: "Dominik Kowalczyk i Matylda Mordal"
+date: '`r Sys.Date()`'
+output:
+  pdf_document:
+    toc: true
+    fig_caption: true
+    fig_width: 5
+    fig_height: 4
+    number_sections: true
+  html_document:
+    toc: true
+    df_print: paged
+header-includes:
+- \usepackage[OT4]{polski}
+- \usepackage[utf8]{inputenc}
+- \usepackage{graphicx}
+- \usepackage{float}
+subtitle: Eksploracja danych
+fontsize: 12pt
+---
+
+```{r biblioteki-i-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, results = 'asis')
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+library(arules)
+library(boot)
+library(caret)
+library(class)
+library(clValid)
+library(cluster)
+library(DataExplorer)
+library(DAAG)
+library(dplyr)
+library(discretization)
+library(e1071)
+library(factoextra)
+library(ggplot2)
+library(GGally)
+library(ggrepel)
+library(gridExtra)
+library(ipred)
+library(kableExtra)
+library(kknn)
+library(knitr)
+library(MASS)
+library(mclust)
+library(mlbench)
+library(purrr)
+library(randomForest)
+library(RColorBrewer)
+library(rpart)
+library(rpart.plot)
+library(summarytools)
+library(tidyr)
+```
+
+# Zaawansowane metody klasyfikacji
+
+## Opis danych 
+
+Do wykonania zadania wykorzystamy zbiór danych Glass (mlbench). Opisuje on dane identyfikacyjne szkła używane oraz potrzebne przy śledztwach kryminalistycznych. Przyjrzyjmy się zatem, co znajduje się w analizowanym zbiorze.
+
+```{r wczytanie-danych, echo=FALSE, results='hide'}
+#Wczytanie danych Vehicle
+data("Glass")
+glass_data <- Glass
+```
+
+```{r tabela-opisowa, echo=FALSE}
+#Tworzenie ramki danych z opisem zmiennych dla zbioru danych Glass
+tz_glass <- data.frame(
+  Indeks = seq_along(names(Glass)),
+  "Nazwa zmiennej" = names(Glass),
+  "Typ zmiennej" = sapply(Glass, class),
+  "Opis zmiennej" = c(
+    "Współczynnik załamania światła",
+    "Zawartość sodu",
+    "Zawartość magnezu",
+    "Zawartość glinu",
+    "Zawartość krzemu",
+    "Zawartość potasu",
+    "Zawartość wapnia",
+    "Zawartość baru",
+    "Zawartość żelaza",
+    "Typ szkła"
+  ),
+  check.names = FALSE
+)
+
+#Tworzenie tabeli
+kable(tz_glass, caption = "Opis danych Glass \\label{tab:OpisGlass}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+
+```{r podstawowe-informacja, echo=FALSE, results='hide'}
+#Podstawowe informacje z str i summary 
+str(glass_data)
+summary(glass_data)
+```
+
+```{r przypadki-zmienne, echo=FALSE, results='hide'}
+#Liczba zmiennych i przypadków
+cat("Liczba przypadków:", nrow(glass_data), "\n")
+
+cat("Liczba zmiennych:", ncol(glass_data), "\n")
+
+#Sprawdzenie typu zmiennej Type
+cat("Typ zmiennej Type:", class(glass_data$Type), "\n")
+```
+Liczba przypadków w zbiorze danych `glass_data` wynosi `r nrow(glass_data)`.
+
+Zbiór danych `glass_data` zawiera `r ncol(glass_data)` zmiennych, z czego ostatnia z nich, `Type` przechowuje informacje o przynależności obiektu do konkretnej klasy (tzw. etykieta klas). Jest ona typu: `r class(glass_data$Type)`. Dodatkowo, pozostałe zmienne zawierają informację dotyczące występowania danego piewiastka chemicznego w szkle i są one typu numeric, co pozwala nam stwierdzić, że wszystkie zmienne w naszym analizowanym zbiorze mają prawidłowo przypisane typy.
+
+```{r typy-zmiennych, echo=FALSE, results='hide'}
+#Spradzenie unikalnych klas
+table(glass_data$Type)
+
+#Sprawdzenie typów zmiennej Type (opisującej klasy szkła)
+cat("Typ zmiennej Type:", class(glass_data$Type), "\n")
+```
+```{r tabela-zmiennych, echo=FALSE}
+#Tworzenie ramki danych z wynikami
+class_counts <- table(glass_data$Type)
+
+class_df <- data.frame(
+  `Typ Szkła` = names(class_counts),
+  `Liczba Obserwacji` = as.numeric(class_counts)
+)
+
+#Tworzenie tabeli za pomocą kableExtra
+kable(class_df, caption = "Liczba Obserwacji dla Każdego Typu Szkła \\label{tab:obserwacjeszklo}") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+
+```{r braki}
+#Czy istnieją jakieś braki w danych?
+any(is.na(glass_data)) || 
+any(sapply(glass_data, function(col) is.character(col) 
+           & (col == "" | grepl(" ", col))))
+```
+- Zatem nasz zbiór danych jest kompletny i nie wsytępują tam żadne braki danych.
+Sprawdźmy rozkład danych w celu zrozumienia z czym mamy doczynienia, jak również poszukując nieścisłości lub różnego rodzaju nietypowych wartości.
+
+W analizowanym zbiorze nie mamy doczynienia z "nieścisłościami" rozkładów w sensie błędów w danych, ale raczej charakterystycznymi cechami chemicznymi różnych typów szkła. Dziwne rozkłady (silnie skośne, z licznymi odstającymi) dla takich pierwiastków jak Mg, K i Ba są prawdopodobnie wynikiem specyficznych receptur chemicznych stosowanych do wytwarzania różnych rodzajów szkła o odmiennych właściwościach (np. szkło budowlane vs. szkło optyczne vs. szkło kryształowe), szczególnie że ilość obserwacji dla każdego typu szkła znacznie się różni (dla klasy 1 jest 70 a dla 6 tylko 9).
+
+## Rodziny klasyfikatorów/uczenie zespołowe (ensemble learning)
+
+```{r ensemble-learning1, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:RozkladKlasGlass}Rozkład klas w zbiorze danych Glass", fig.height=5, fig.width=7}
+# Rozkład klas
+barplot(
+  prop.table(table(glass_data$Type)),
+  col = c("navy", "seagreen", "maroon", "darkorange3", "red4", "snow4"),
+  main = "Dane Glass - rozkład klas",
+  ylab = "Proporcja"
+)
+grid()
+```
+Rysunek \ref{fig:RozkladKlasGlass} obrazuje, jak rozkładają się klasy w zbiorze danych `Glass`. Na osi poziomej mamy numery klas od 1 do 7, a na osi pionowej widzimy proporcje, które sięgają ponad 0,30. Najwięcej danych przypada na klasę 2, a następna pod względem wielkości jest klasa 1. Klasy 3, 5, 6 i 7 mają znacznie mniejsze proporcje, wszystkie poniżej 0,15.
+
+```{r ensemble-learning2, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:PCAGlass}PCA dla danych Glass", fig.height=5, fig.width=7}
+# PCA – wizualizacja danych
+glass.pca <- prcomp(glass_data[,-10], center=TRUE, scale.=TRUE)
+cols <- c("navy", "seagreen", "maroon", "darkorange3", "red4", "snow4")
+plot(glass.pca$x[,1:2], col=cols[as.numeric(glass_data$Type)], main="Dane Glass - PCA", pch=15, cex=0.7)
+legend("topright", col=cols, legend=levels(glass_data$Type), pch=15, bg="white")
+```
+Z kolei Rysunek \ref{fig:PCAGlass}, czyli PCA dla danych Glass, wizualizuje dane po zastosowaniu analizy głównych składowych. Wykres ten prezentuje punkty danych w dwuwymiarowej przestrzeni, zdefiniowanej przez dwie pierwsze składowe główne (PC1 i PC2). Na podstawie tej wizualizacji można zauważyć, że klasa 7 jest stosunkowo dobrze oddzielona od pozostałych, natomiast inne klasy w znacznym stopniu na siebie nachodzą, co sugeruje trudności w ich liniowej separacji w tej przestrzeni.
+
+```{r ensemble-learning3, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:BoxplotGlass}Wykresy pudełkowe cech zbioru danych Glass", fig.height=8, fig.width=7}
+
+# Dane w formacie długim (long format
+glass_long <- glass_data %>%
+  pivot_longer(-Type, names_to = "Zmienna", values_to = "Wartosc")
+
+colory <- c("navy", "seagreen", "maroon", "darkorange3", "red4", "snow4")
+
+# Boxploty z podziałem na zmienne
+ggplot(glass_long, aes(x = Type, y = Wartosc, fill = Type)) +
+  geom_boxplot(outlier.size = 0.8, outlier.alpha = 0.5) +
+  facet_wrap(~ Zmienna, scales = "free_y", ncol = 3) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "none",
+    strip.background = element_rect(fill = "#f5f5f5"),
+    strip.text = element_text(face = "bold"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  scale_fill_manual(values = colory) +
+  labs(
+    title = "Boxploty zmiennych względem typu szkła",
+    x = "Typ szkła",
+    y = "Wartość zmiennej"
+  )
+
+```
+
+Wykresy pudełkowe cech zbioru danych `Glass` (Rysunek \ref{fig:BoxplotGlass}) przedstawiją rozkład wartości zmiennych chemicznych względem typu szkła. Najlepsze zmienne do rozróżniania klas wydają się być `Mg` (magnez) i `Al` (glin). Ich boxploty wykazują różnice w medianach i zakresach między poszczególnymi klasami, co sugeruje, że te pierwiastki mają potencjał dyskryminacyjny. Z kolei ograniczone zdolności do rozróżniania klas posiada `Fe` (żelazo) oraz `K` (potas). Rozkłady wartości są zbliżone dla wszystkich klas, z nakładającymi się boxplotami, co wskazuje na jej niewielki potencjał dyskryminacyjny. 
+
+
+```{r ensemble-learning4, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:DrzewoGlass}Drzewo klasyfikacyjne dla zbioru danych Glass", fig.height=5, fig.width=7}
+# Drzewo klasyfikacyjne jako klasyfikator bazowy
+tree <- rpart(Type ~ ., data = glass_data)
+rpart.plot(tree, main = "Drzewo klasyfikacyjne - dane Glass", cex = 0.5, )
+
+```
+
+Rysunek  \ref{fig:DrzewoGlass} przedstawia strukturę drzewa klasyfikacyjnego zbudowanego dla zbioru danych `Glass`. Drzewo rozpoczyna podział od zmiennej dotyczącej zawartości baru (`Ba` < 0.34), a kolejne rozgałęzienia opierają się na zawartości glinu (Al), magnezu (Mg) oraz wapnia (Ca). Jak pokazano na Rysunku  \ref{fig:DrzewoGlass}, klasa 1 (pomarańczowa) i klasa 2 (żółta) dominują w przewidywaniach, szczególnie w liściach o wysokich wartościach procentowych (np. 27% dla klasy 1 i 24% dla klasy 2). Jednak obecność różnych klas w poszczególnych liściach, takich jak klasy 3, 5, 6 i 7 w mniejszych proporcjach, wskazuje na trudności modelu w jednoznacznym rozróżnianiu niektórych przypadków, co sugeruje pewne nakładanie się cech między klasami.
+
+```{r ensemble-learning5, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:BaggingRep}Wpływ liczby replikacji na błąd baggingu", fig.height=5, fig.width=7 }
+# Bagging
+btree <- bagging(Type ~ ., data = glass_data, nbagg = 25, coob = TRUE, control = rpart.control(minsplit=1, cp=0))
+
+# Test wpływu liczby replikacji na błąd
+B.vector <- c(1, 5, 10, 20, 30, 40, 50, 100)
+bagging.error.rates <- sapply(B.vector, function(b)  {errorest(Type~., data=Glass, model=bagging, nbagg=b, estimator="632plus", est.para=control.errorest(nboot = 20))$error})
+
+plot(B.vector, bagging.error.rates, xlab = "Liczba replikacji B", 
+     ylab = "Błąd klasyfikacji", main = "Bagging - wpływ liczby replikacji", type = "b")
+grid()
+
+# Tworzenie ramki danych dla tabeli
+tz <- data.frame(
+  `Liczba replikacji B` = B.vector,
+  `Błąd klasyfikacji` = sprintf("%.2f%%", bagging.error.rates * 100),
+  check.names = FALSE
+)
+
+min_blad <- min
+
+tz_ensemble <- t(tz)
+tz_ensemble <- cbind(rownames(tz_ensemble), tz_ensemble)
+rownames(tz_ensemble) <- NULL
+
+# Wyświetlanie tabeli
+kable(tz_ensemble, 
+      caption = "Wpływ liczby replikacji na błąd klasyfikacji \\label{tab:EnsembleGlass}", 
+      row.names = FALSE, 
+      align = c("c", "c")) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+# Najmniejszy błąd
+min_blad <- min(bagging.error.rates)
+
+# Indeks minimalnego błędu
+min_index <- which.min(bagging.error.rates)
+
+# Liczba drzew (nbagg) dla której błąd jest minimalny
+najlepsze_b <- B.vector[min_index]
+
+# Błąd dla pierwszego nbagg
+blad_pierwszy <- bagging.error.rates[1]
+
+# Błąd dla ostatniego nbagg
+blad_ostatni <- bagging.error.rates[length(bagging.error.rates)]
+```
+Rysunek \ref{fig:BaggingRep} i Tabela \ref{tab:EnsembleGlass} ilustrują wpływ liczby replikacji (B) na błąd klasyfikacji w metodzie bagging dla zbioru danych. Na Rysunku \ref{fig:BaggingRep} widać, że błąd klasyfikacji maleje wraz ze wzrostem liczby replikacji B. Tabela \ref{tab:EnsembleGlass} potwierdza te trendy: najniższy błąd wynosi `r round(min_blad*100, 2)`% dla B=`r najlepsze_b`, podczas gdy przy B = 1 błąd wynosi `r round(blad_pierwszy*100, 2)`%. 
+
+```{r ensemble-learning6, message=FALSE, warning=FALSE, echo=FALSE}
+# Random Forest
+p <- ncol(glass_data) - 1
+
+# Model RF z 1 drzewem dla porównania
+rf.1 <- randomForest(Type ~ ., data = glass_data, ntree = 1, mtry = p, importance = TRUE)
+
+# Główny model RF
+rf.2 <- randomForest(Type ~ ., data = glass_data, ntree = 100, mtry = sqrt(p), importance = TRUE)
+pred.labels <- predict(rf.2, newdata = glass_data, type = "class")
+real.labels <- glass_data$Type
+confusion.matrix <- table(pred.labels, real.labels)
+
+kable(as.data.frame.matrix(confusion.matrix), 
+      caption = "Macierz pomyłek - Random Forest dla zbioru danych Glass \\label{tab:ConfRF}") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered"))
+```
+
+```{r ensemble-learning7, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:BladRF}Błąd modelu Random Forest w zależności od liczby drzew", fig.height=5, fig.width=7}
+# Wykres błędu i ważność zmiennych
+plot(rf.2, main = "Błąd klasyfikacji w Random Forest")
+```
+
+Wyniki modelu Random Forest dla zbioru danych Glass są przedstawione w Tabeli \ref{tab:ConfRF} i Rysunku \ref{fig:BladRF}. Tabela \ref{tab:ConfRF} (macierz pomyłek) wskazuje, że model doskonale radzi sobie z klasami, ponieważ nie odnotowano żadnych błędów klasyfikacji. Rysunek \ref{fig:BladRF} pokazuje błąd klasyfikacji w zależności od liczby drzew (od 0 do 100), gdzie widać, że początkowo błąd dla poszczególnych jest wysoki i waha się, jednak wraz ze wzrostem liczby drzew, krzywe błędu zbiegają się i stabilizują, co wskazuje na poprawę i stabilizację działania modelu. Zatem model Random Forest wykazuje bardzo wysoką skuteczność w klasyfikacji danych Glass, co jest widoczne zarówno w stabilizacji błędu wraz ze wzrostem liczby drzew, jak i w idealnej macierzy pomyłek.
+
+```{r ensemble-learning8, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:WaznoscRF}Ważność zmiennych w modelu Random Forest", fig.height=5, fig.width=7}
+varImpPlot(rf.2, main = "Ważność zmiennych - Random Forest")
+
+# Porównanie błędów klasyfikacji – metoda .632+
+mypredict.rpart <- function(object, newdata) predict(object, newdata=newdata, type="class")
+
+error.tree <- errorest(Type ~ ., data = glass_data, model = rpart,
+                       predict = mypredict.rpart, estimator = "632plus",
+                       est.para = control.errorest(nboot = 20))
+
+error.bagging <- errorest(Type ~ ., data = glass_data, model = bagging,
+                          estimator = "632plus", est.para = control.errorest(nboot = 20))
+
+error.rf <- errorest(Type ~ ., data = glass_data, model = randomForest,
+                     estimator = "632plus", est.para = control.errorest(nboot = 20))
+
+#Tabela z wynikami – porównanie skuteczności
+
+bledy <- data.frame(
+  Metoda = c("Pojedyncze drzewo", "Bagging", "Random Forest"),
+  `Błąd klasyfikacji (.632+)` = c(
+    paste0(formatC(error.tree$error * 100, format = "f", digits = 2), "%"),
+    paste0(formatC(error.bagging$error * 100, format = "f", digits = 2), "%"),
+    paste0(formatC(error.rf$error * 100, format = "f", digits = 2), "%")
+  ),
+  check.names = FALSE
+)
+
+redukcja <- data.frame(
+  Porównanie = c("Bagging vs Tree", "Random Forest vs Tree"),
+  `Redukcja błędu (%)` = c(
+    sprintf("%.2f%%", 100 * (error.tree$error - error.bagging$error) / error.tree$error),
+    sprintf("%.2f%%", 100 * (error.tree$error - error.rf$error) / error.tree$error)
+  ),
+  check.names = FALSE
+)
+```
+Oceniając istotność cech dla modelu Random Forest, Rysunek \ref{fig:WaznoscRF} przedstawia wgląd w ważność zmiennych na podstawie miar `MeanDecreaseAccuracy` i `MeanDecreaseGini`. Z analizy obu wykresów wynika, że zmienne takie jak `Mg`, `RI` oraz `Al` konsekwentnie wykazują największy wpływ na działanie modelu, co świadczy o ich kluczowej roli w klasyfikacji danych Glass. Z kolei zmienna `Fe`, według obu miar, cechuje się najniższą ważnością.
+
+```{r ensemble-learning9, message=FALSE, warning=FALSE, echo=FALSE}
+kable(bledy, caption = "Błędy klasyfikacji metod \\label{tab:BladGlass}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+kable(redukcja, caption = "Porównanie redukcji błędu \\label{tab:RedukcjaGlass}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+
+```
+
+Badając skuteczność różnych metod klasyfikacji, zauważono wyraźne różnice w ich błędach, co jest przedstawione w Tabeli \ref{tab:BladGlass} Pojedyncze drzewo decyzyjne wykazało błąd klasyfikacji na poziomie `r round(error.tree$error*100, 2)`%. Znaczącą poprawę odnotowano dla metody Bagging, której błąd wyniósł `r round(error.bagging$error*100, 2)`%. Najlepsze rezultaty osiągnął model Random Forest, z błędem klasyfikacji na poziomie `r round(error.rf$error*100, 2)`%.
+
+Analizując redukcję błędu względem pojedynczego drzewa, co szczegółowo przedstawia Tabela \ref{tab:RedukcjaGlass}, Bagging zmniejszył błąd o `r  round(100*((error.tree$error - error.bagging$error) / error.tree$error), 2)`%. Random Forest okazał się jeszcze skuteczniejszy, redukując błąd aż o `r round(100* ((error.tree$error - error.rf$error) / error.tree$error), 2)`%. Zatem metody zespołowe, a w szczególności Random Forest, istotnie przewyższają pojedyncze drzewa w klasyfikacji danych `Glass`, oferując znacznie wyższą precyzję.
+
+## Metoda wektorów nośnych (SVM)
+
+```{r Svm1, message=FALSE, warning=FALSE, echo=FALSE, fig.cap="\\label{fig:SVM_Wizualizacje}Wizualizacja klasyfikatorów SVM dla różnych funkcji jądrowych i parametrów", fig.height=3.5, fig.width=7}
+
+# KLASYFIKACJA SVM – Dane Glass (Mg, Al)
+
+set.seed(123)
+data("Glass")
+dane <- na.omit(Glass)
+
+n <- nrow(dane)
+learn.ind    <- sample(1:n, 2/3*n)
+training.set <- dane[learn.ind,]
+test.set     <- dane[-learn.ind,]
+
+# Zmienna celu
+real.labels <- test.set$Type
+n.test <- length(real.labels)
+
+
+#Jądro liniowe – różne wartości parametru kosztu (C)
+
+
+# Model C = 0.1
+svm.linear.C0.1 <- svm(Type ~ Mg + Al, data=training.set, kernel="linear", cost=0.1)
+
+# Model C = 1
+svm.linear.C1 <- svm(Type ~ Mg + Al, data=training.set, kernel="linear", cost=1)
+
+# Model C = 10
+svm.linear.C10 <- svm(Type ~ Mg + Al, data=training.set, kernel="linear", cost=10)
+
+# Oceny skuteczności dla wszystkich C
+pred.C0.1 <- predict(svm.linear.C0.1, newdata=test.set)
+cm.C0.1 <- table(pred.C0.1, real.labels)
+acc.C0.1 <- sum(diag(cm.C0.1)) / n.test
+
+pred.C1 <- predict(svm.linear.C1, newdata=test.set)
+cm.C1 <- table(pred.C1, real.labels)
+acc.C1 <- sum(diag(cm.C1)) / n.test
+
+pred.C10 <- predict(svm.linear.C10, newdata=test.set)
+cm.C10 <- table(pred.C10, real.labels)
+acc.C10 <- sum(diag(cm.C10)) / n.test
+
+# Porównanie funkcji jądrowych: polynomial i radial
+
+svm.poly2  <- svm(Type ~ Mg + Al, data=training.set, kernel="polynomial", degree=2)
+svm.poly4  <- svm(Type ~ Mg + Al, data=training.set, kernel="polynomial", degree=4)
+svm.radial.default <- svm(Type ~ Mg + Al, data=training.set, kernel="radial")
+svm.radial.C1.gamma4 <- svm(Type ~ Mg + Al, data=training.set, kernel="radial", cost=1, gamma=4)
+
+
+# Wizualizacje
+plot(svm.linear.C1, data=training.set, Mg~Al, svSymbol=16, grid=100, main="SVM linear (C=1)")
+legend("topleft", "linear C=1", bg="white")
+plot(svm.poly2, data=training.set, Mg~Al, svSymbol=16, grid=100, main="SVM poly (deg=2)")
+legend("topleft", "poly deg=2", bg="white")
+plot(svm.poly4, data=training.set, Mg~Al, svSymbol=16, grid=100, main="SVM poly (deg=4)")
+legend("topleft", "poly deg=4", bg="white")
+plot(svm.radial.default, data=training.set, Mg~Al, svSymbol=16, grid=100, main="SVM radial (domyślne)")
+legend("topleft", "radial domyślne", bg="white")
+plot(svm.radial.C1.gamma4, data=training.set, Mg~Al, svSymbol=16, grid=100, main="SVM radial (optymalne)")
+legend("topleft", "radial (optymalne)", bg="white")
+
+```
+Rysunki od 8 do \ref{fig:SVM_Wizualizacje} przedstawiają wizualizacje działania klasyfikatorów SVM z różnymi funkcjami jądrowymi i parametrami, bazującymi na zmiennych `Mg` i `Al` ze zbioru danych `Glass`. Na każdym z wykresów widoczne są punkty danych (próbki szkła) oraz obszary decyzyjne, reprezentujące przewidywane klasy. Obserwujemy, że jądro liniowe tworzy proste granice, podczas gdy jądra wielomianowe generują coraz bardziej złożone, zakrzywione obszary. Jądra radialne pozwalają na tworzenie najbardziej elastycznych i skomplikowanych granic, co jest szczególnie widoczne w przypadku jądra radialnego z optymalnymi parametrami, gdzie granice decyzyjne są precyzyjnie dopasowane do grup punktów. Ogólnie rzecz biorąc, im bardziej złożone jądro, tym lepsze dopasowanie do nieliniowej struktury danych i potencjalnie lepsza separacja klas.
+
+```{r Svm2, message=FALSE, warning=FALSE, echo=FALSE, , fig.cap="\\label{fig:SVM_Tuning_Radial_Cost_Gamma}Wizualizacja dokładności klasyfikacji w przestrzeni parametrów (cost, gamma)", fig.height=4, fig.width=7}
+
+# Prognozy i ocena dokładności
+pred.poly2 <- predict(svm.poly2, newdata=test.set)
+pred.poly4 <- predict(svm.poly4, newdata=test.set)
+pred.radial <- predict(svm.radial.default, newdata=test.set)
+
+cm.poly2 <- table(pred.poly2, real.labels)
+cm.poly4 <- table(pred.poly4, real.labels)
+cm.radial <- table(pred.radial, real.labels)
+
+acc.poly2 <- sum(diag(cm.poly2)) / n.test
+acc.poly4 <- sum(diag(cm.poly4)) / n.test
+acc.radial <- sum(diag(cm.radial)) / n.test
+
+# Optymalizacja parametrów (tuning) dla radialnego SVM
+
+C.range <- 2^((-4):4)
+gamma.range <- 2^((-5):2)
+
+radial.tune <- tune(svm, Type ~ Mg + Al, data=training.set, kernel="radial",
+                    ranges=list(cost=C.range, gamma=gamma.range))
+
+# Wizualizacja przestrzeni parametrów (cost, gamma)
+plot(radial.tune, transform.x = log, transform.y = log,
+     color.palette = topo.colors,
+     main = "Accuracy (log scale): cost vs gamma")
+
+best.model <- radial.tune$best.model
+pred.radial.tuned <- predict(best.model, newdata=test.set)
+cm.radial.tuned <- table(pred.radial.tuned, real.labels)
+acc.radial.tuned <- sum(diag(cm.radial.tuned)) / n.test
+
+# Tabelka z najlepszymi parametrami
+best.params <- data.frame(
+  Parametr = c("Najlepszy cost (C)", "Najlepszy gamma"),
+  Wartość = c(
+    round(radial.tune$best.parameters$cost),
+    round(radial.tune$best.parameters$gamma)
+  )
+)
+
+kable(best.params, col.names = c("Parametr", "Wartość"),
+      caption = "Najlepsze parametry radialnego SVM i odpowiadająca im dokładność \\label{tab:Najpar}") %>%
+
+  kable_styling(bootstrap_options = c("striped", "condensed", "hover"))
+```
+
+Rysunek \ref{fig:SVM_Tuning_Radial_Cost_Gamma} wizualizuje dokładność klasyfikacji w przestrzeni parametrów `cost` i `gamma` dla modelu SVM, możemy zaobserwować, jak te parametry wpływają na skuteczność klasyfikatora. Z wykresu wynika, że najwyższa dokładność koncentruje się niedaleko górnego lewego rogu, gdzie wartości cost są niższe i wartości gamma są wyższe. To sugeruje, że dla tego zbioru danych model SVM osiąga najlepsze wyniki przy niższych wartościach parametru kary C (cost) i wyższych wartościach gamma. Tabela \ref{tab:Najpar} wskazuje, że najlepsze parametry to cost (C) równy 1 oraz gamma równy 4. Ta kombinacja parametrów zapewnia optymalną dokładność modelu radialnego SVM dla zbioru danych `Glass`.
+
+```{r Svm3, message=FALSE, warning=FALSE, echo=FALSE}
+
+# Tabele wyników
+
+# Tabela dokładności
+acc.table <- data.frame(
+  Model = c("SVM liniowy (C=0.1)", "SVM liniowy (C=1)", "SVM liniowy (C=10)",
+            "SVM poly deg=2", "SVM poly deg=4",
+            "SVM radial (domyślne)", "SVM radial (optymalne)"),
+  Dokładność = c(
+    sprintf("%.2f%%", acc.C0.1 * 100),
+    sprintf("%.2f%%", acc.C1 * 100),
+    sprintf("%.2f%%", acc.C10 * 100),
+    sprintf("%.2f%%", acc.poly2 * 100),
+    sprintf("%.2f%%", acc.poly4 * 100),
+    sprintf("%.2f%%", acc.radial * 100),
+    sprintf("%.2f%%", acc.radial.tuned * 100)
+  )
+)
+
+kable(acc.table, digits=3, caption="Porównanie skuteczności różnych funkcji jądrowych i parametrów C\\label{tab:Skutecznosc}") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+# Macierze pomyłek
+kable(as.data.frame.matrix(cm.C0.1), caption="Macierz pomyłek: SVM liniowy (C = 0.1, 1, 10) \\label{tab:Liniowy}") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered"))
+
+#kable(as.data.frame.matrix(cm.C1), caption="Macierz pomyłek: SVM liniowy (C = 1)") %>%
+ # kable_styling(bootstrap_options = c("striped", "bordered"))
+
+#kable(as.data.frame.matrix(cm.C10), caption="Macierz pomyłek: SVM liniowy (C = 10)") %>%
+  #kable_styling(bootstrap_options = c("striped", "bordered"))
+
+kable(as.data.frame.matrix(cm.poly2), caption="Macierz pomyłek: SVM poly (deg=2)\\label{tab:Poly2}") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered"))
+
+kable(as.data.frame.matrix(cm.poly4), caption="Macierz pomyłek: SVM poly (deg=4) \\label{tab:Poly4}") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered"))
+
+kable(as.data.frame.matrix(cm.radial), caption="Macierz pomyłek: SVM radial (domyślne) \\label{tab:RadialDom}") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered"))
+
+kable(as.data.frame.matrix(cm.radial.tuned), caption="Macierz pomyłek: SVM radial (optymalne) \\label{tab:RadialOpt}") %>%
+  kable_styling(bootstrap_options = c("striped", "bordered"))
+
+```
+Przyglądając się skuteczności różnych funkcji jądrowych
+i parametrów C, widać wyraźne zróżnicowanie ich dokładności, co jest szczegółowo przedstawione w Tabeli \ref{tab:Skutecznosc}.  Wyniki wskazują, że liniowe SVM (dla C=0.1, C=1, C=10) osiągnęły taką samą dokładności w zakresie `r  round(100*acc.C0.1, 2)`-`r  round(100*acc.C1, 2)`%. Modele z jądrem wielomianowym (stopnia 2 i 4) uzyskały dokładności odpowiednio `r  round(100*acc.poly2, 2)`% i `r  round(100*acc.poly4, 2)`%. Najlepsze wyniki odnotowano dla jądra radialnego, gdzie domyślny model osiągnął `r  round(100*acc.radial, 2)`% dokładności, a model zoptymalizowany `r  round(100*acc.radial.tuned, 2)`%, widoczna jest więc poprawa. Tabele \ref{tab:Liniowy}, \ref{tab:Poly2}, \ref{tab:Poly4}, \ref{tab:RadialDom} i \ref{tab:RadialOpt}, które prezentują macierze pomyłek dla różnych konfiguracji SVM, można zauważyć, jak zmienia się zdolność modelu do poprawnej klasyfikacji poszczególnych klas. Na przykład, dla SVM liniowego klasa 1 jest mylona z klasą 2, a klasa 2 z klasą 1. Jądra wielomianowe wykazują nieco lepsze rezultaty w rozróżnianiu klas niż liniowe. Natomiast dla SVM radialnego pomyłki między klasami są najmniejsze, choć nadal występują.
+
+Wybór funkcji jądrowej oraz wybór parametru kosztu C w istotnym stopniu wpływają na dokładność metody SVM. Jak widać w Tabeli 6, zmiana parametru kosztu C z 0.1 na 1 lub 10 nie przynosi dużej poprawy dokładności, utrzymując ją na podobnym poziomie. Natomiast zmiana funkcji jądrowej z liniowej na wielomianową nieco pogarsza dokładność. Co więcej, w przypadku jądra wielomianowego, stopień 2 spisał się lepiej niż stopień 4. Natomiast przejście do jądra radialnego przynosi największą poprawę dodatkowo optymalizacja parametrów przyniosła korzyść i pozwoliła na poprawę skuteczności skonstruowanego klasyfikatora.
+
+## Porównanie skuteczności metod
+
+Porównując wyniki uzyskane w analizie metod ensemble learning i klasyfikatorów SVM, można zauważyć wyraźne różnice w skuteczności działania poszczególnych podejść.
+
+Zdecydowanie najlepsze rezultaty osiągnęła metoda Random Forest, która przewyższyła zarówno klasyczne drzewo decyzyjne, jak i bagging. Random Forest okazał się nie tylko najbardziej precyzyjny, ale również najbardziej stabilny — model ten skutecznie rozpoznawał wszystkie klasy i dobrze radził sobie z różnorodnością danych. W odróżnieniu od pojedynczego drzewa, które miało trudności z uogólnieniem danych.
+
+Z kolei metody oparte na SVM, mimo zastosowania różnych funkcji jądrowych (liniowe, wielomianowe i radialne) oraz optymalizacji parametrów, okazały się mniej skuteczne. Choć najbardziej zaawansowany wariant – SVM z radialnym jądrem i dobranymi parametrami – poradził sobie lepiej niż pozostałe konfiguracje SVM, nadal nie osiągnął poziomu skuteczności porównywalnego z Random Forest. Klasyfikatory SVM miały trudności z dokładnym rozróżnianiem niektórych klas, zwłaszcza tych mniej licznych, co negatywnie wpłynęło na ogólną trafność modelu.
+
+Można więc stwierdzić, że Random Forest zdecydowanie najlepiej poradził sobie z klasyfikacją danych Glass, wyraźnie przewyższając zarówno bagging, jak i wszystkie warianty SVM dla zbioru danych 'Glass'.
+
+# Analiza skupień - algorytmy grupujące i hierarchiczne 
+
+## Przygotowanie danych 
+
+W tym zadaniu skupimy się na analizie skupień. Do jej wykonania wykorzystamy ten sam zbiór co w zadaniu 2 z listy 3, czyli zbiór Glass (mlbench), który opisuje dane identyfikacyjne szkła używane oraz potrzebne przy śledztwach kryminalistycznych.
+
+```{r wczytanie danych, echo=FALSE}
+#Wczytanie zbioru danych GLASS - ten sam na którym pracowaliśmy w zadaniu 1 i 2 z listy 3
+data("Glass")
+glass_data2 <- Glass
+```
+
+Zauważmy, że wszystkie dane w naszym zbiorze poza zmienną reprezentującą klasy - `Type` są numeryczne. Zatem usunięcie z analizy zmiennej grupującej zawierającej etykiety klas zrobimy poprzez przeprowadzenie analizy na zbiorze zmiennych numerycznych. 
+
+```{r podzialbezglass, echo=FALSE}
+#Identyfikujemy zmienne numeryczne (wszystkie oprócz 'Type')
+numeric_cols <- names(Glass)[sapply(Glass, is.numeric)]
+glass_numeric <- Glass[, numeric_cols]
+glass_etykietki_rzeczywiste <- Glass$Type
+```
+
+Pomijamy szczegółowy opis danych, ponieważ pracujemy na dobrze znanym i wcześniej analizowanym zbiorze (z zadania 2 listy 3 oraz zadania 1 z listy 4). Kluczowe jest jednak powtórne sprawdzenie potrzeby standaryzacji danych, gdyż ten krok ma fundamentalne znaczenie dla wiarygodności naszej analizy skupień.
+
+```{r pudelkowewartosci, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:pudelkowewartosci1}Wykresy pudełkowe względem zmiennych"}
+#Tworzymy listę wykresów pudełkowych
+plot_list <- list()
+for (i in 1:ncol(glass_numeric)) {
+  p <- ggplot(glass_numeric, aes(y = .data[[names(glass_numeric)[i]]])) +
+    geom_boxplot() +
+    labs(y = names(glass_numeric)[i]) +
+    theme_minimal() +
+    theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+  plot_list[[i]] <- p
+}
+#Wyświetlamy wszystkie wykresy razem (możesz dostosować liczbę kolumn)
+grid.arrange(grobs = plot_list, ncol = 3)
+```
+
+```{r wariancje_zad2, echo=FALSE}
+#Obliczanie wariancji
+wariancje <- sapply(glass_numeric, var)
+
+# Tworzenie ramki danych do tabeli
+wariancje_df <- data.frame(
+  Zmienna = names(wariancje),
+  Wariancja = as.numeric(wariancje)
+)
+
+#Wyświetlenie tabeli wariancji
+kable(wariancje_df, caption = "Wariancje poszczególnych zmiennych numerycznych \\label{tab:wariancjeszklo}", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "bordered", "hover"))
+```
+Biorąc pod uwagę wartości przedstawione w Tabeli \ref{tab:wariancjeszklo}, która obrazuje wariancje analizowanych zmiennych, oraz Rysunku \ref{fig:pudelkowewartosci1}, prezentującego wykresy pudełkowe tych zmiennych, standaryzacja danych jest konieczna. Widzimy, że wartości wahają się od zaledwie 0.0000092 dla `RI` do ponad 2 dla `Mg` oraz `Ca`,co jasno wskazuje na potrzebę standaryzacji (wizualizacja po standaryzacji - Rysunek \ref{fig:pudelkowestandar1}).
+
+```{r standaryzacja_zad2, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:pudelkowestandar1}Wykresy pudełkowe względem zmiennych"}
+#Standaryzacja
+glass_stand <- scale(glass_numeric)
+
+#Rysowanie boxplotu
+boxplot(glass_stand, 
+        main = "Wykresy pudełkowe po standaryzacji", 
+        las = 2, 
+        col = "lightgreen", 
+        border = "black", 
+        ylab = "Wartości standaryzowane")
+
+#Dodanie siatki poziomej
+grid(nx = NA, ny = NULL, col = "gray", lty = "dotted")
+```
+
+## Wizualizacja wyników grupowania
+
+Skupimy się na dwóch głównych algorytmach grupowania: K-średnich (K-means) oraz hierarchicznego. Przyjmijmy liczbę skupień K jako równą rzeczywistej liczbie klas.
+
+```{r klustry2, echo=FALSE}
+K_clusters <- nlevels(glass_etykietki_rzeczywiste)
+cat("Rzeczywista liczba klas (K) w zbiorze Glass:", K_clusters, "\n")
+```
+
+```{r kmeansalg, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:rozrzutkmeans}Wykres rozrzutu zmiennych po grupowaniu algorytmem K-means"}
+library(cluster)
+library(stats) # Pakiety potrzebne do kmeans i scale
+#algorytm: k-means oraz wykres rozrzutu na jego podstawie 
+
+#Ustalenie ziarna losowości — zapewnia powtarzalność wyników
+set.seed(123)
+
+# Przygotowanie danych
+glass_cechy_stand <- as.data.frame(glass_stand) # standaryzowane dane numeryczne
+
+# Algorytm k-means
+kmeans_glass <- kmeans(glass_cechy_stand, centers = K_clusters, iter.max = 100, nstart = 25)
+glass_etykietki_kmeans <- as.factor(kmeans_glass$cluster)
+
+# PCA na standaryzowanych danych
+glass_pca <- prcomp(glass_cechy_stand, center = TRUE, scale. = FALSE)
+
+# Dane do wizualizacji
+pca_data <- data.frame(
+  PC1 = glass_pca$x[, 1],
+  PC2 = glass_pca$x[, 2],
+  Cluster = glass_etykietki_kmeans,
+  Actual_Class = glass_etykietki_rzeczywiste
+)
+
+# Wykres rozrzutu z ggplot2
+ggplot(pca_data, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = Cluster, shape = Actual_Class), size = 3, alpha = 0.7) +
+  labs(
+    title = paste0("Wizualizacja skupień (K-Means, K=", K_clusters, ") i rzeczywistych klas (PCA)"),
+    subtitle = "Kolor: Przypisane skupienia, Kształt: Rzeczywiste klasy",
+    x = "Główny Komponent 1",
+    y = "Główny Komponent 2"
+  ) +
+  scale_color_discrete(name = "Skupienie (K-Means)") +
+  scale_shape_discrete(name = "Klasa Rzeczywista") +
+  theme_minimal() +
+  theme(legend.position = "right")
+```
+
+Na Rysunku \ref{fig:rozrzutkmeans} widać, że redukcja wymiarów przy pomocy PCA pozwoliła zobrazować strukturę danych w dwóch głównych komponentach. Widoczna jest częściowa zgodność między skupieniami a klasami, jednak pewne klasy są rozproszone po różnych klastrach, co może świadczyć o ich słabszej separowalności w przestrzeni cech.
+
+```{r zacoodpowiadajakomponenty, echo=FALSE, results='hide'}
+# Zmienna glass_pca pochodzi z: prcomp(...)
+loadings <- glass_pca$rotation[, 1:2]  # ładunki dla PC1 i PC2
+print(loadings)
+```
+```{r chierarchiczne1, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:chierarchiczne1}Wykres zmiennych po grupowaniu algorytmem chierarchicznym"}
+# Funkcja dist() domyślnie używa odległości euklidesowej.
+dist_matrix <- dist(glass_cechy_stand, method = "euclidean")
+
+hc_agnes_complete <- agnes(dist_matrix, method = "complete")
+hc_agnes_average <- agnes(dist_matrix, method = "average")
+hc_agnes_single <- agnes(dist_matrix, method = "single")
+
+#Cięcie klastrów
+clusters_agnes_complete <- as.factor(cutree(as.hclust(hc_agnes_complete), k = K_clusters))
+clusters_agnes_average <- as.factor(cutree(as.hclust(hc_agnes_average), k = K_clusters))
+clusters_agnes_single <- as.factor(cutree(as.hclust(hc_agnes_single), k = K_clusters))
+```
+
+```{r complete1, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:complete2}Dendrogram Agnes - Complete"}
+# Dendrogram dla Metody Complete
+fviz_dend(as.hclust(hc_agnes_complete), k = K_clusters, show_labels = FALSE,
+          k_colors = "aaas", rect = TRUE, rect_border = "aaas", rect_fill = TRUE,
+          main = paste0("Dendrogram (Agnes, Complete) - ", K_clusters, " skupień"))
+```
+
+
+```{r average1, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:average2}Dendrogram Agnes - Average"}
+# Dendrogram dla Metody Average
+fviz_dend(as.hclust(hc_agnes_average), k = K_clusters, show_labels = FALSE,
+          k_colors = "aaas", rect = TRUE, rect_border = "aaas", rect_fill = TRUE,
+          main = paste0("Dendrogram (Agnes, Average) - ", K_clusters, " skupień"))
+```
+
+```{r single1, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:single2}Dendrogram Agnes - Single"}
+# Dendrogram dla Metody Single
+fviz_dend(as.hclust(hc_agnes_single), k = K_clusters, show_labels = FALSE,
+          k_colors = "aaas", rect = TRUE, rect_border = "aaas", rect_fill = TRUE,
+          main = paste0("Dendrogram (Agnes, Single) - ", K_clusters, " skupień"))
+```
+
+
+Dendrogramy prezentują hierarchiczne grupowanie danych przy użyciu różnych metod łączenia: complete (Rysunek \ref{fig:complete2}), average (Rysunek \ref{fig:average2}) oraz single (Rysunek \ref{fig:single2}) linkage. Wszystkie zostały „ucięte” na poziomie 6 skupień, zgodnie z rzeczywistą liczbą klas. Metoda complete wykazuje bardziej wyraźną i zbalansowaną strukturę skupień, natomiast single linkage prowadzi do nieco bardziej niestabilnego i „łańcuchowego” łączenia obiektów, co może skutkować mniej czytelnym podziałem.
+
+```{r completepca, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:pcacomplete}Wykres rozrzutu Agnes Complete poprzez PCA"}
+glass_pca <- prcomp(glass_cechy_stand, center = TRUE, scale. = FALSE)
+
+pca_data_agnes_complete <- data.frame(
+  PC1 = glass_pca$x[, 1],
+  PC2 = glass_pca$x[, 2],
+  Cluster = clusters_agnes_complete,        #Przypisania z agnes (Complete)
+  Actual_Class = glass_etykietki_rzeczywiste #Rzeczywiste klasy obiektów
+)
+
+ggplot(pca_data_agnes_complete, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = Cluster, shape = Actual_Class), size = 3, alpha = 0.7) +
+  labs(
+    title = paste0("Skupienia (Agnes Complete, K=", K_clusters, ") vs. Rzeczywiste Klasy (PCA)"),
+    subtitle = "Kolor: Przypisane skupienia (Agnes), Kształt: Rzeczywiste klasy",
+    x = "Główny Komponent 1",
+    y = "Główny Komponent 2"
+  ) +
+  scale_color_discrete(name = "Skupienie (Agnes Complete)") +
+  scale_shape_discrete(name = "Klasa Rzeczywista") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+```
+
+```{r averagepca, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:pcaaverage}Wykres rozrzutu Agnes Average z PCA"}
+# Wykres dla Metody Average (Agnes)
+pca_data_agnes_average <- data.frame(
+  PC1 = glass_pca$x[, 1],
+  PC2 = glass_pca$x[, 2],
+  Cluster = clusters_agnes_average,         # Przypisania z agnes (Average)
+  Actual_Class = glass_etykietki_rzeczywiste
+)
+
+ggplot(pca_data_agnes_average, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = Cluster, shape = Actual_Class), size = 3, alpha = 0.7) +
+  labs(
+    title = paste0("Skupienia (Agnes Average, K=", K_clusters, ") vs. Rzeczywiste Klasy (PCA)"),
+    subtitle = "Kolor: Przypisane skupienia (Agnes), Kształt: Rzeczywiste klasy",
+    x = "Główny Komponent 1",
+    y = "Główny Komponent 2"
+  ) +
+  scale_color_discrete(name = "Skupienie (Agnes Average)") +
+  scale_shape_discrete(name = "Klasa Rzeczywista") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+```
+
+
+```{r singlepca, echo=FALSE, fig.width=10, fig.height=6, fig.cap="\\label{fig:pcasingle}Wykres rozrzutu Agnes Single poprzez PCA"}
+# Wykres dla Metody Single (Agnes)
+pca_data_agnes_single <- data.frame(
+  PC1 = glass_pca$x[, 1],
+  PC2 = glass_pca$x[, 2],
+  Cluster = clusters_agnes_single,          # Przypisania z agnes (Single)
+  Actual_Class = glass_etykietki_rzeczywiste
+)
+
+ggplot(pca_data_agnes_single, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = Cluster, shape = Actual_Class), size = 3, alpha = 0.7) +
+  labs(
+    title = paste0("Skupienia (Agnes Single, K=", K_clusters, ") vs. Rzeczywiste Klasy (PCA)"),
+    subtitle = "Kolor: Przypisane skupienia (Agnes), Kształt: Rzeczywiste klasy",
+    x = "Główny Komponent 1",
+    y = "Główny Komponent 2"
+  ) +
+  scale_color_discrete(name = "Skupienie (Agnes Single)") +
+  scale_shape_discrete(name = "Klasa Rzeczywista") +
+  theme_minimal() +
+  theme(legend.position = "right")
+```
+
+Każdy z wykresów odpowiada innej metodzie łączenia: complete (Rysunek \ref{fig:pcacomplete}), average (Rysunek \ref{fig:pcaaverage}) i single (Rysunek \ref{fig:pcasingle}). Kolory wskazują przypisane skupienia, a kształty – rzeczywiste klasy. Metoda complete osiąga stosunkowo najlepsze dopasowanie skupień do klas, natomiast average i szczególnie single pokazują większe rozproszenie obiektów tej samej klasy między różnymi skupieniami. Może to sugerować, że complete linkage lepiej radzi sobie z zachowaniem struktury klas w tym zbiorze.
+
+
+Analiza wyników grupowania dla zbioru danych Glass pozwala ocenić podstawowe własności uzyskanych skupień, takie jak ich zwartość, jednorodność i separacja. W przypadku algorytmu K-średnich, skupienia są względnie zwarte i częściowo odzwierciedlają rzeczywistą strukturę klas. Jednakże, na wykresie rozrzutu po redukcji wymiarów metodą PCA widoczna jest jedynie umiarkowana separacja. Fakt, że niektóre klasy są rozproszone po różnych klastrach, może wskazywać na ich mniejsze zróżnicowanie w przestrzeni cech.
+
+W analizie hierarchicznej zaś zauważalne są istotne różnice wynikające z zastosowanych metod łączenia. Dendrogramy jednoznacznie pokazują, że metoda complete linkage prowadzi do najlepiej zorganizowanej struktury hierarchicznej, w której skupienia są względnie dobrze wyodrębnione i równomiernie rozłożone. Metoda average linkage daje efekty umiarkowane, stanowiąc pewien kompromis, natomiast single linkage tworzy niestabilne, rozciągnięte klastry, co świadczy o niskiej zwartości i słabej separacji, wynikającej z tak zwanego efektu chainingu.
+
+Wizualizacje skupień hierarchicznych na płaszczyźnie PCA dodatkowo potwierdzają te obserwacje: najlepszą zgodność między przypisanymi skupieniami a rzeczywistymi klasami można zaobserwować dla metody complete linkage, gdzie obiekty jednej klasy często trafiają do tego samego klastra. Metoda average linkage wykazuje nieco niższą zgodność, a w przypadku single linkage obiekty tej samej klasy są silnie rozproszone, co przekłada się na niską zgodność z rzeczywistą strukturą danych.
+
+Podsumowując, otrzymany podział na skupienia zgadza się z rzeczywistą przynależnością obiektów do klas jedynie częściowo. Najlepsze wyniki uzyskano przy zastosowaniu metody complete linkage oraz algorytmu K-średnich, choć nawet w tych przypadkach występują wyraźne rozbieżności, co sugeruje, że klasy w zbiorze Glass nie są idealnie separowalne w analizowanej przestrzeni cech.
+
+## Ocena jakości grupowania. Wybór optymalnej liczby skupień i porównanie metod.
+
+Weźmy zakres dla K od 2 do 12, w celu określenia który z algorytmów PAM oraz AGNES lepiej poradził sobie z grupowaniem ustandaryzowanych danych `Glass` oraz jakie K jest najbardziej optymalne. Weźmiemy AGNES complete, ponieważ jak pokazała powyższa analiza jest to najlepszy możliwy rodzaj algorytmu AGNES. 
+
+```{r wewnetrzna, echo=FALSE, fig.width=6, fig.height=6, fig.cap="\\label{fig:wewnetrzna1}Wykres porównania Silhouette - PAM vs AGNES "}
+
+# Zakres liczby klastrów
+K_range <- 2:12
+
+pam_sil_values <- numeric(length(K_range))
+agnes_sil_values <- numeric(length(K_range))
+
+for (i in seq_along(K_range)) {
+  k <- K_range[i]
+  
+  # PAM
+  pam_model <- pam(glass_stand, k)
+  pam_sil <- silhouette(pam_model$clustering, dist(glass_stand))
+  pam_sil_values[i] <- mean(pam_sil[, 3])
+  
+  # AGNES
+  agnes_model <- agnes(glass_stand, method = "complete")
+  agnes_clusters <- cutree(as.hclust(agnes_model), k = k)
+  agnes_sil <- silhouette(agnes_clusters, dist(glass_stand))
+  agnes_sil_values[i] <- mean(agnes_sil[, 3])
+}
+
+
+plot(K_range, pam_sil_values, type = "o", col = "blue", pch = 16, lwd = 2,
+     xlab = "Liczba klastrów (K)", ylab = "Średni indeks Silhouette",
+     main = "Porównanie silhouette: PAM vs AGNES", ylim = range(c(pam_sil_values, agnes_sil_values)))
+lines(K_range, agnes_sil_values, type = "o", col = "red", pch = 17, lwd = 2)
+legend("topright", legend = c("PAM", "AGNES"), col = c("blue", "red"), pch = c(16, 17), lwd = 2)
+
+
+```
+
+Wykres \ref{fig:wewnetrzna1} ilustruje zachowanie wskaźnika wewnętrznego – średniego indeksu Silhouette. Dla algorytmu AGNES (linia czerwona), obserwujemy początkowy wzrost wartości indeksu, z osiągnięciem maksimum w przedziale K od 3 do 5, gdzie wartość ta kształtuje się na poziomie około 0.40-0.41. Następnie następuje spadek, a potem ponowny wzrost dla K od 10 do 11 do około 0.37. W przypadku algorytmu PAM (linia niebieska), najwyższą wartość około 0.41 odnotowujemy dla K=2, po czym następuje gwałtowny spadek do około 0.25 dla K=3, a następnie stopniowy wzrost do około 0.32 dla K=6 i K=7. Wartości indeksu dla PAM drastycznie maleją dla K powyżej 8. Na podstawie tych danych, AGNES wydaje się być bardziej stabilny i osiąga wyższe wartości Silhouette w większości analizowanego zakresu K, co sugeruje tworzenie bardziej spójnych i lepiej oddzielonych skupień wewnętrznie. Optymalne K dla AGNES, z perspektywy Silhouette, wydaje się leżeć w przedziale od 4 do 5.
+
+```{r zewnetrzna, echo=FALSE, fig.width=6, fig.height=6, fig.cap="\\label{fig:zewnetrzna1}Wykres porównania zgodności z rzeczywistymi klasami - PAM vs AGNES "}
+K_range <- 2:12
+pam_ari <- numeric(length(K_range))
+agnes_ari <- numeric(length(K_range))
+
+for (i in seq_along(K_range)) {
+  k <- K_range[i]
+  
+  # PAM
+  pam_model <- pam(glass_stand, k)
+  pam_ari[i] <- adjustedRandIndex(pam_model$clustering, glass_etykietki_rzeczywiste)
+  
+  # AGNES
+  agnes_model <- agnes(glass_stand, method = "complete")
+  agnes_cut <- cutree(as.hclust(agnes_model), k = k)
+  agnes_ari[i] <- adjustedRandIndex(agnes_cut, glass_etykietki_rzeczywiste)
+}
+
+# Wykres
+plot(K_range, pam_ari, type = "o", col = "blue", pch = 16, lwd = 2,
+     xlab = "Liczba klastrów (K)", ylab = "Zgodność z rzeczywistymi klasami",
+     main = "Porównanie zgodności z klasami: PAM vs AGNES", ylim = c(0, 1))
+
+lines(K_range, agnes_ari, type = "o", col = "red", pch = 17, lwd = 2)
+legend("topright", legend = c("PAM", "AGNES"), col = c("blue", "red"), pch = c(16, 17), lwd = 2)
+
+
+```
+Rysunek \ref{fig:zewnetrzna1} przedstawia wartości Adjusted Rand Index (ARI), który jest wskaźnikiem zewnętrznym, mierzącym zgodność między uzyskanym podziałem na klastry a rzeczywistą przynależnością obiektów do klas. Zarówno dla algorytmu PAM (linia niebieska), jak i AGNES (linia czerwona), wartości ARI są stosunkowo niskie. Dla PAM, wartości ARI wahają się od około 0.18 dla K=2, ze spadkiem do 0.12 dla K=4, a następnie delikatnym wzrostem do około 0.20 dla K=10 i K=11. Algorytm AGNES rozpoczyna z niemal zerowymi wartościami dla K=2, stopniowo rosnąc do około 0.28 dla K=10, K=11 i K=12. Niskie wartości ARI dla obu metod wskazują na ograniczoną zgodność z rzeczywistymi klasami w całym badanym zakresie K. Mimo że AGNES osiąga nieco wyższe wartości ARI dla większych K, różnice te nie są znaczące.
+
+Podsumowując, wybór optymalnej liczby klastrów okazuje się niejednoznaczny. Indeks Silhouette sugeruje, że dla AGNES optymalna liczba skupień pod względem wewnętrznej spójności wynosi K=3 lub K=5 (bardziej K=5). Adjusted Rand Index natomiast nie dostarcza wyraźnego wskazania na optymalne K, a jego ogólnie niskie wartości świadczą o tym, że zarówno PAM, jak i AGNES mają trudności w precyzyjnym odtworzeniu rzeczywistych klas zbioru danych Glass. 
+
+Żaden z algorytmów nie jest w stanie w zadowalającym stopniu odzwierciedlić rzeczywistej struktury danych. W porównaniu algorytmów, AGNES wykazuje nieznaczną przewagę nad PAM w aspekcie tworzenia wewnętrznie spójnych i dobrze oddzielonych skupień, co potwierdza indeks Silhouette. Jednakże, jeśli chodzi o zgodność z rzeczywistymi klasami, oba algorytmy wypadają podobnie i osiągają raczej niskie wyniki ARI. To ostatecznie sugeruje, że pomimo standaryzacji danych, rzeczywiste klasy w zbiorze Glass są ze sobą mocno przemieszane w przestrzeni cech, co utrudnia ich jednoznaczną separację za pomocą metod grupowania.
+
+## Interpretacja wyników grupowania - charakterystyki skupień 
+
+Jako optymalne K weźmy zatem 5, która wyróżnia się względnie wysokimi wartościami (jak przedstawiają Rysunki \ref{fig:zewnetrzna1} oraz \ref{fig:wewnetrzna1}) na tle pozostałych wartości K. 
+
+
+```{r cluster_assignment_K5_corrected, echo=FALSE}
+glass_cechy_stand_matrix <- as.matrix(glass_stand)
+dist_matrix <- dist(glass_cechy_stand_matrix, method = "euclidean")
+
+set.seed(123)
+pam_result_K5 <- pam(dist_matrix, k = 5, diss = TRUE)
+glass_clusters_pam_K5 <- as.factor(pam_result_K5$clustering)
+
+agnes_complete_result_K5 <- agnes(dist_matrix, method = "complete", diss = TRUE)
+glass_clusters_agnes_K5 <- as.factor(cutree(as.hclust(agnes_complete_result_K5), k = 5))
+
+glass_clustered_K5 <- as.data.frame(glass_cechy_stand_matrix) %>%
+  mutate(
+    Cluster_PAM = glass_clusters_pam_K5,
+    Cluster_AGNES = glass_clusters_agnes_K5,
+    Actual_Class = glass_etykietki_rzeczywiste
+  )
+
+cat("Wyznaczono podziały na 5 skupień dla algorytmów PAM i AGNES (AGNES z metodą 'complete').\n")
+cat("Dane z przypisaniami do klastrów są dostępne w ramce danych 'glass_clustered_K5'.\n")
+```
+
+Z faktu, że wstawienie całej tabeli byłoby bardzo problematyczne, skonstruujmy nowy podział i wyświetlmy tabele podsumowującą średnie wartości cech dla każdego klastra oddzielnie dla PAM i oddzielnie dla AGNES (complete) oraz w celu scharakteryzowania i rozróżnienia klastrów przeanalizujemy wykresy pudełkowe dla każdej zmiennej. 
+
+```{r mean_features_pam_K5_no_comments, echo=FALSE}
+mean_features_pam_K5 <- glass_clustered_K5 %>%
+  group_by(Cluster_PAM) %>%
+  summarise(
+    n_objects = n(),
+    across(RI:Fe, ~ round(mean(.), 2))
+  )
+
+knitr::kable(mean_features_pam_K5,
+             caption = "Średnie wartości standaryzowanych cech dla każdego klastra (PAM, K=5)",
+             align = "c") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                            full_width = FALSE)
+```
+
+```{r medoids_pam_K5_no_comments, echo=FALSE}
+medoid_indices <- pam_result_K5$medoids
+
+medoid_data_stand <- glass_cechy_stand_matrix[medoid_indices, ]
+
+medoid_data_df <- as.data.frame(medoid_data_stand) %>%
+  mutate(Cluster = 1:nrow(.), .before = 1)
+
+cat("Medoidy (reprezentanci skupień) dla PAM (K=5) to obiekty o następujących indeksach:\n")
+print(medoid_indices)
+cat("\n")
+
+cat("Standaryzowane wartości cech dla medoidów (PAM, K=5):\n")
+knitr::kable(medoid_data_df,
+             caption = "Standaryzowane wartości cech dla medoidów (PAM, K=5)",
+             align = "c",
+             digits = 2) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                            full_width = FALSE)
+```
+
+
+```{r boxplots_features_K5_d, echo=FALSE, fig.width=10, fig.height=8, fig.cap="\\label{fig:boxplot11}Wykresy pudełkowe dla cech w klastrach PAM"}
+glass_clustered_K5_long_pam <- glass_clustered_K5 %>%
+  dplyr::select(-Cluster_AGNES, -Actual_Class) %>%
+  pivot_longer(cols = -Cluster_PAM, names_to = "Feature", values_to = "Value")
+
+plot_box_pam <- ggplot(glass_clustered_K5_long_pam, aes(x = Cluster_PAM, y = Value, fill = Cluster_PAM)) +
+  geom_boxplot() +
+  facet_wrap(~ Feature, scales = "free_y", ncol = 3) +
+  labs(title = "Rozkład cech w klastrach PAM (K=5)",
+       x = "Numer Klastra",
+       y = "Standaryzowana wartość cechy") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5))
+
+print(plot_box_pam)
+```
+
+***Klaster 1***
+- 24 obiekty: Wysoki indeks refrakcji (`RI`), podwyższone `Na` i `Mg`, bardzo niskie `Al` i `Si`. Medoid (obiekt 44) potwierdza tę charakterystykę (`RI` = 1.23, `Al` = -1.45, `Si` = -1.15). Może sugerować szkło specjalistyczne optycznie, dekoracyjne.
+
+***Klaster 2***
+- 106 obiektów: Największy klaster z cechami bliskimi średniej dla większości zmiennych. Medoid (obiekt 43) jest bardzo zbliżony do średnich wartości klastra (RI = -0.19, Mg = 0.49, Al = -0.23), wskazując na "typowe" szkło. 
+
+***Klaster 3***
+- 39 obiektów: Wyróżnia się bardzo wysoką zawartością żelaza (`Fe`), podwyższonym `Mg` i `Si`, oraz niskim Na. Medoid (obiekt 33) potwierdza wysoką zawartość żelaza (`Fe` = 1.67) i magnezu (`Mg` = 0.55), z niskim `Na` (-0.68), sugerując, że może to odpowiadać szkłu zabarwionemu (żelazo to częsty barwnik do szkła).
+
+***Klaster 4***
+- 8 obiektów: Bardzo wysoki indeks refrakcji (`RI`) i wapń (`Ca`), bardzo niskie `Mg`. Medoid (obiekt 171) potwierdza wysokie `RI` (1.75) i `Ca` (2.31), z bardzo niskim `Mg` (-1.86). Wskazuje na szkło optyczne (okulary).
+
+***Klaster 5***
+- 27 obiektów: Wysoka zawartość baru (`Ba`), sodu (`Na`), glinu (`Al`) i krzemu (`Si`), przy bardzo niskim magnezie (`Mg`). Medoid (obiekt 205) potwierdza te cechy (`Ba` = 1.00, `Na` = 1.89, `Al` = 1.65, `Mg` = -1.86). 
+
+
+```{r Agnes-tabela-stand, echo=FALSE}
+mean_features_agnes_K5 <- glass_clustered_K5 %>%
+  group_by(Cluster_AGNES) %>%
+  summarise(
+    n_objects = n(),
+    across(RI:Fe, ~ round(mean(.), 2))
+  )
+
+knitr::kable(mean_features_agnes_K5,
+             caption = "Średnie wartości standaryzowanych cech dla każdego klastra (AGNES, K=5)",
+             align = "c") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                            full_width = FALSE)
+```
+
+
+```{r boxplots_features_K5-Agnes, echo=FALSE, fig.width=10, fig.height=8, fig.cap="\\label{fig:boxplotagnes11}Wykresy pudełkowe dla cech w klastrach AGNES"}
+glass_clustered_K5_long_agnes <- glass_clustered_K5 %>%
+  dplyr::select(-Cluster_PAM, -Actual_Class) %>%
+  pivot_longer(cols = -Cluster_AGNES, names_to = "Feature", values_to = "Value")
+
+plot_box_agnes <- ggplot(glass_clustered_K5_long_agnes, aes(x = Cluster_AGNES, y = Value, fill = Cluster_AGNES)) +
+  geom_boxplot() +
+  facet_wrap(~ Feature, scales = "free_y", ncol = 3) +
+  labs(title = "Rozkład cech w klastrach AGNES (K=5)",
+       x = "Numer Klastra",
+       y = "Standaryzowana wartość cechy") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5))
+
+print(plot_box_agnes)
+```
+
+***Klaster 1***
+- 191 obiektów: to największy klaster, obejmujący większość próbek. Cechy są bliskie średniej (`RI` = -0.12, `Na` = 0.02, `Mg` = 0.16), co sprawia, że jest bardzo heterogeniczny i pozbawiony wyraźnych wyróżników. Możemy zasugerować, że reprezentuje on pospolite szkło (np. okienne), a jego dominacja sugeruje trudności AGNES w dokładnej separacji danych.
+
+***Klaster2***
+- 16 obiektów: charakteryzuje się bardzo wysokim indeksem refrakcji (`RI`) i wapniem (`Ca`), podwyższonym żelazem (`Fe`) oraz niskim magnezem (`Mg`) i krzemem (`Si`). To jednorodna grupa, która prawdopodobnie odpowiada szkłu optycznemu lub zabarwionemu.
+
+***Klaster 3***
+- 4 obiekty: ma bardzo wysoką zawartość baru (`Ba`), glinu (`Al`) i potasu (`K`), przy ekstremalnie niskim wapniu (`Ca`) i krzemie (`Si`). 
+
+***Klaster 4***
+- 2 obiekty: wyróżnia się ekstremalnie wysokim potasem (`K`) i glinem (`Al`), a bardzo niskim krzemem (`Si`), magnezem (`Mg`) i indeksem refrakcji (`RI`). 
+
+***Klaster 5***
+- To pojedynczy obiekt-outlier o ekstremalnie wysokim sodzie (`Na`) i krzemie (`Si`), ale bardzo niskim indeksie refrakcji (`RI`) i glinie (`Al`). 
+
+Szkła wchodzące w skład Klastra 3,4 i 5 pod względem ilości obiektów nazwalibyśmy szkłem bardzo rzadkim oraz specjalistycznym (outliery), któremu ciężko jest przypisać jakiekolwiek zastosowanie, czy użyteczność.
+
+
+Podsumowując, PAM jest bardziej skuteczny w identyfikacji zróżnicowanych typów szkła, tworząc zrównoważone klastry z wyraźnymi cechami chemicznymi, co czyni go lepszym wyborem do analizy różnorodności w zbiorze „Glass”. AGNES z metodą „complete” lepiej radzi sobie z wychwytywaniem nietypowych obiektów, takich jak rzadkie typy szkła czy outliery, ale jego tendencja do grupowania większości danych w jeden ogólny klaster zmniejsza zdolność do separacji danych. Oba algorytmy potwierdzają, że zbiór „Glass” jest trudny do klastrowania ze względu na słabą separowalność klas, co wynika z niskich wartości ARI i przemieszania cech w przestrzeni danych, utrudniając precyzyjne odtworzenie rzeczywistej struktury klas.
