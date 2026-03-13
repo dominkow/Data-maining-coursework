@@ -1,2 +1,2 @@
-# Data-maining-coursework
-Zawiera zadania, raporty oraz projekty z eksploracji danych realizowane w języku R. Repozytorium obejmuje techniki klasyfikacji, klasteryzacji, redukcji wymiarów oraz analizę dużych zbiorów danych.
+# Data-maining and Time Series Analysis
+Zawiera zadania, raporty oraz projekty z eksploracji danych realizowane w języku R. Repozytorium obejmuje techniki klasyfikacji, klasteryzacji, redukcji wymiarów oraz analizę dużych zbiorów danych. Dodatkowa są zawarte sprawozdania wraz z kodami z analizy szeregów czasowych - dekompozycji, różnicowania, prognozowania (modele ARIMA) itp.
